@@ -1,0 +1,66 @@
+@startuml
+|Client|
+start
+:Remplir le formulaire de demande de prêt\n(ID, infos personnelles, type, montant, description);
+:Soumettre le formulaire via API REST\nà l'Application Compagnon;
+
+|Application Compagnon|
+:Recevoir la demande de prêt;
+:Appeler MS MontantMax [gRPC] pour vérifier le montant;
+
+partition "MS MontantMax" {
+  :Vérifier que le montant demandé est ≤ plafond autorisé;
+  if (Montant > plafond?) then (Oui)
+    :Retourner échec;
+  else (Non)
+    :Retourner succès;
+  endif
+}
+
+if (Montant > plafond?) then (Oui)
+  :Préparer notification de refus :\n"Montant trop élevé";
+else (Non)
+  :Appeler MS ProfilRisque [GraphQL] avec les infos client;
+  partition "MS ProfilRisque" {
+    :Analyser le profil financier et déterminer le risque;
+    if (Risque = élevé \net Montant ≥ 20000?) then (Oui)
+      :Retourner "Risque élevé";
+    else (Non)
+      :Retourner "Risque acceptable";
+    endif
+  }
+  if (Risque élevé et Montant ≥ 20000?) then (Oui)
+    :Préparer notification de refus :\n"Risque trop élevé";
+  else (Non)
+    :Demander au client de soumettre un chèque de banque;
+    |Client|
+    :Envoyer le chèque de banque;
+    |Application Compagnon|
+    :Appeler MS Banque [SOAP] pour valider le chèque;
+    partition "MS Banque" {
+      :Simuler la validation du chèque;
+      if (Chèque valide?) then (Oui)
+        :Retourner "Chèque validé";
+      else (Non)
+        :Retourner "Chèque invalide";
+      endif
+    }
+    if (Chèque invalide?) then (Oui)
+      :Préparer notification de refus :\n"Chèque invalide";
+    else (Non)
+      :Appeler MS Fournisseur [REST] pour demander les fonds;
+      partition "MS Fournisseur" {
+        :Demander la libération des fonds;
+        :Transférer le montant sur le compte bancaire du client;
+        :Retourner succès;
+      }
+      :Préparer notification d'approbation :\n"Prêt approuvé et fonds transférés";
+    endif
+  endif
+endif
+
+:Notifier le client via REST;
+|Client|
+:Recevoir notification;
+stop
+@enduml
