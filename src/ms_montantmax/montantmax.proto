@@ -1,0 +1,17 @@
+// src/ms_montantmax/montantmax.proto
+syntax = "proto3";
+
+package montantmax;
+
+service MontantMaxService {
+  rpc CheckLoan (LoanRequest) returns (LoanResponse);
+}
+
+message LoanRequest {
+  float loan_amount = 1;
+}
+
+message LoanResponse {
+  bool allowed = 1;
+  string message = 2;
+}
