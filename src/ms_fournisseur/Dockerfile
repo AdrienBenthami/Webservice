@@ -4,6 +4,9 @@ FROM python:3.13-slim
 # Définir le répertoire de travail dans le conteneur
 WORKDIR /app
 
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y curl
+
 # Mettre à jour pip et installer Flask (et autres dépendances si besoin)
 RUN pip install --upgrade pip && \
     pip install flask

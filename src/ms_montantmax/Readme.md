@@ -5,9 +5,13 @@ docker run -d -p 50051:50051 ms_montantmax
 
 ```
 
-Dans un autre terminal :
+Dans un autre terminal : (depuis ms_montantmax)
 ```sh
 grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
+```
+Dans un autre terminal : (depuis le fichier racines)
+```sh
+grpcurl -plaintext -proto src/ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
 ```
 
 Réponse : 

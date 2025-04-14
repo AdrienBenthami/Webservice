@@ -10,6 +10,10 @@ docker run -d -p 5001:5001 ms_profilrisque
 
 Dans un autre terminal :
 ```sh
+curl http://localhost:5001/health
+```
+
+```sh
 curl -X POST -H "Content-Type: application/json" \
 -d '{
       "query": "query($loanAmount: Float!, $clientInfo: String!){ riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo) }",

@@ -4,6 +4,9 @@ FROM python:3.13-slim
 # Définir le répertoire de travail dans le container sur /app
 WORKDIR /app
 
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y netcat-openbsd
+
 # Ajouter le dossier contenant les modules générés au PYTHONPATH
 ENV PYTHONPATH="/app/ms_montantmax:${PYTHONPATH}"
 

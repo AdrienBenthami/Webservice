@@ -1,4 +1,5 @@
 Webservice
+├── compose.yaml
 ├── docs
 │   └── diagramme_activite.puml
 └── src
@@ -13,6 +14,7 @@ Webservice
     │   ├── requirements.txt
     │   └── server.py
     ├── ms_fournisseur
+    │   ├── Dockerfile
     │   ├── Readme.md
     │   ├── __init__.py
     │   └── server.py
@@ -25,9 +27,101 @@ Webservice
     │   ├── montantmax_pb2_grpc.py
     │   └── server.py
     └── ms_profilrisque
+        ├── Dockerfile
+        ├── Readme.md
         ├── __init__.py
         └── server.py
 
+================================================================================
+Chemin relatif: compose.yaml
+services:
+  ms_montantmax:
+    build: ./src/ms_montantmax
+    ports:
+      - "50051:50051"
+    healthcheck:
+      # Ici, on vérifie que le port 50051 est ouvert (pour un service gRPC, on peut par exemple tester avec nc)
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ms_profilrisque:
+    build: ./src/ms_profilrisque
+    ports:
+      - "5001:5001"
+    networks:
+      - webservice
+    depends_on:
+      - ms_montantmax
+    healthcheck:
+      # Vérifier que l'endpoint GraphQL répond (curl doit être présent dans l'image, sinon adaptez)
+      test: ["CMD-SHELL", "curl -f http://localhost:5001/graphql || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ms_banque:
+    build: ./src/ms_banque
+    ports:
+      - "5002:5002"
+    networks:
+      - webservice
+    depends_on:
+      - ms_profilrisque
+    healthcheck:
+      # Pour le service SOAP, on vérifie que le port est ouvert
+      test: ["CMD-SHELL", "nc -z localhost 5002 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ms_fournisseur:
+    build: ./src/ms_fournisseur
+    ports:
+      - "5003:5003"
+    networks:
+      - webservice
+    depends_on:
+      - ms_banque
+    healthcheck:
+      # Vérifier que l'API REST répond (ici, l'endpoint /fund doit renvoyer une réponse HTTP 200)
+      test: ["CMD-SHELL", "curl -f http://localhost:5003/fund || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+#  compagnon:
+#    build: ./src/app
+#    ports:
+#      - "5000:5000"
+#    networks:
+#      - webservice
+#    depends_on:
+#      ms_montantmax:
+#        condition: service_healthy
+#      ms_profilrisque:
+#        condition: service_healthy
+#      ms_banque:
+#        condition: service_healthy
+#      ms_fournisseur:
+#        condition: service_healthy
+#    healthcheck:
+#      # Vérifier que l'application compagnon (accessible sur le port 5000) répond
+#      test: ["CMD-SHELL", "curl -f http://localhost:5000 || exit 1"]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 5
+#    restart: unless-stopped
+
+
+networks:
+  webservice:
+    driver: bridge
 ================================================================================
 Chemin relatif: docs/diagramme_activite.puml
 @startuml
@@ -104,6 +198,30 @@ Chemin relatif: src/__init__.py
 Chemin relatif: src/ms_fournisseur/__init__.py
 
 ================================================================================
+Chemin relatif: src/ms_fournisseur/Dockerfile
+# Utiliser une image Python 3.10 slim
+FROM python:3.13-slim
+
+# Définir le répertoire de travail dans le conteneur
+WORKDIR /app
+
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y curl netcat-openbsd
+
+# Mettre à jour pip et installer Flask (et autres dépendances si besoin)
+RUN pip install --upgrade pip && \
+    pip install flask
+
+# Copier le code source dans le conteneur
+COPY . .
+
+# Exposer le port utilisé par l’application (5003)
+EXPOSE 5003
+
+# Lancer l’application
+CMD ["python", "server.py"]
+
+================================================================================
 Chemin relatif: src/ms_fournisseur/server.py
 # src/ms_fournisseur/app.py
 from flask import Flask, request, jsonify
@@ -121,15 +239,24 @@ def fund_request():
         "status": "success", 
         "message": f"Fonds de {loan_amount} transférés pour le client {client_id}"
     }), 200
+    
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
-    app.run(port=5003)
+    app.run(host="0.0.0.0", port=5003)
 
 ================================================================================
 Chemin relatif: src/ms_fournisseur/Readme.md
 Pour tester:
 ```sh
 python server.py
+```
+Ou en docker :
+```sh
+docker build -t ms_fournisseur .
+docker run -d -p 5003:5003 ms_fournisseur
 ```
 
 Dans un autre terminal :
@@ -162,6 +289,9 @@ FROM python:3.10-slim
 
 # Définir le répertoire de travail dans le conteneur
 WORKDIR /app
+
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y curl netcat-openbsd
 
 # Copier le fichier des dépendances dans le conteneur
 COPY requirements.txt .
@@ -203,7 +333,6 @@ application = Application([BanqueService],
 if __name__ == '__main__':
     from wsgiref.simple_server import make_server
     server = make_server('0.0.0.0', 5002, WsgiApplication(application))
-    print("MS Banque (SOAP) est en cours d'exécution sur le port 5002...")
     server.serve_forever()
 
 ================================================================================
@@ -325,6 +454,9 @@ FROM python:3.13-slim
 # Définir le répertoire de travail dans le container sur /app
 WORKDIR /app
 
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y curl netcat-openbsd
+
 # Ajouter le dossier contenant les modules générés au PYTHONPATH
 ENV PYTHONPATH="/app/ms_montantmax:${PYTHONPATH}"
 
@@ -370,7 +502,7 @@ def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     # Ajouter notre service au serveur
     montantmax_pb2_grpc.add_MontantMaxServiceServicer_to_server(MontantMaxService(), server)
-    # Écouter sur le port 50051
+    # Écouter sur le port 5001
     server.add_insecure_port('[::]:50051')
     server.start()
     print("MS MontantMax gRPC server is running on port 50051")
@@ -431,9 +563,13 @@ docker run -d -p 50051:50051 ms_montantmax
 
 ```
 
-Dans un autre terminal :
+Dans un autre terminal : (depuis ms_montantmax)
 ```sh
 grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
+```
+Dans un autre terminal : (depuis le fichier racines)
+```sh
+grpcurl -plaintext -proto src/ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
 ```
 
 Réponse : 
@@ -589,6 +725,30 @@ class MontantMaxService(object):
 Chemin relatif: src/ms_profilrisque/__init__.py
 
 ================================================================================
+Chemin relatif: src/ms_profilrisque/Dockerfile
+# Utiliser une image Python 3.10 slim
+FROM python:3.13-slim
+
+# Définir le répertoire de travail dans le conteneur
+WORKDIR /app
+
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y curl netcat-openbsd
+
+# Installer les dépendances nécessaires : Flask et Graphene
+RUN pip install --upgrade pip && \
+    pip install flask graphene
+
+# Copier le code source dans le conteneur
+COPY . .
+
+# Exposer le port utilisé (ici 5001)
+EXPOSE 5001
+
+# Lancer l’application
+CMD ["python", "server.py"]
+
+================================================================================
 Chemin relatif: src/ms_profilrisque/server.py
 # src/ms_profilrisque/app.py
 from flask import Flask, request, jsonify
@@ -615,7 +775,38 @@ def graphql_server():
     result = schema.execute(data.get("query"), variables=data.get("variables"))
     return jsonify(result.data)
 
-if __name__ == '__main__':
-    app.run(port=5001)
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
 
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=5001)
+
+================================================================================
+Chemin relatif: src/ms_profilrisque/Readme.md
+Pour tester:
+```sh
+python server.py
+```
+Ou en docker :
+```sh
+docker build -t ms_profilrisque .
+docker run -d -p 5001:5001 ms_profilrisque
+```
+
+Dans un autre terminal :
+```sh
+curl -X POST -H "Content-Type: application/json" \
+-d '{
+      "query": "query($loanAmount: Float!, $clientInfo: String!){ riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo) }",
+      "variables": {"loanAmount": 25000, "clientInfo": "Information client exemple"}
+    }' \
+http://localhost:5001/graphql
+
+```
+
+Réponse : hrg
+```sh
+{"riskProfile":"elev\u00e9"}
+```
 ================================================================================

@@ -4,6 +4,9 @@ FROM python:3.10-slim
 # Définir le répertoire de travail dans le conteneur
 WORKDIR /app
 
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y netcat-openbsd
+
 # Copier le fichier des dépendances dans le conteneur
 COPY requirements.txt .
 
