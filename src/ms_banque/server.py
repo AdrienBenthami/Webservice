@@ -20,5 +20,4 @@ application = Application([BanqueService],
 if __name__ == '__main__':
     from wsgiref.simple_server import make_server
     server = make_server('0.0.0.0', 5002, WsgiApplication(application))
-    print("MS Banque (SOAP) est en cours d'exécution sur le port 5002...")
     server.serve_forever()

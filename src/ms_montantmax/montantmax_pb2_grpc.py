@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import montantmax_pb2 as montantmax__pb2
+import montantmax_pb2 as montantmax__pb2
 
 GRPC_GENERATED_VERSION = '1.71.0'
 GRPC_VERSION = grpc.__version__
@@ -26,7 +26,8 @@ if _version_not_supported:
 
 
 class MontantMaxServiceStub(object):
-    """Missing associated documentation comment in .proto file."""
+    """Définition du service gRPC
+    """
 
     def __init__(self, channel):
         """Constructor.
@@ -35,17 +36,19 @@ class MontantMaxServiceStub(object):
             channel: A grpc.Channel.
         """
         self.CheckLoan = channel.unary_unary(
-                '/montantmax.MontantMaxService/CheckLoan',
+                '/ms_montantmax.MontantMaxService/CheckLoan',
                 request_serializer=montantmax__pb2.LoanRequest.SerializeToString,
                 response_deserializer=montantmax__pb2.LoanResponse.FromString,
                 _registered_method=True)
 
 
 class MontantMaxServiceServicer(object):
-    """Missing associated documentation comment in .proto file."""
+    """Définition du service gRPC
+    """
 
     def CheckLoan(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Méthode pour vérifier le montant du prêt
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -60,14 +63,15 @@ def add_MontantMaxServiceServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'montantmax.MontantMaxService', rpc_method_handlers)
+            'ms_montantmax.MontantMaxService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('montantmax.MontantMaxService', rpc_method_handlers)
+    server.add_registered_method_handlers('ms_montantmax.MontantMaxService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
 class MontantMaxService(object):
-    """Missing associated documentation comment in .proto file."""
+    """Définition du service gRPC
+    """
 
     @staticmethod
     def CheckLoan(request,
@@ -83,7 +87,7 @@ class MontantMaxService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/montantmax.MontantMaxService/CheckLoan',
+            '/ms_montantmax.MontantMaxService/CheckLoan',
             montantmax__pb2.LoanRequest.SerializeToString,
             montantmax__pb2.LoanResponse.FromString,
             options,

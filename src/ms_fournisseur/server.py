@@ -2,6 +2,7 @@
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False
 
 @app.route('/fund', methods=['POST'])
 def fund_request():
@@ -15,4 +16,4 @@ def fund_request():
     }), 200
 
 if __name__ == '__main__':
-    app.run(port=5003)
+    app.run(host="0.0.0.0", port=5003)

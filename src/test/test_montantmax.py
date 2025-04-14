@@ -1,5 +1,14 @@
 # src/test/test_montantmax.py
 
+import os
+import sys
+
+# Ajoute le répertoire parent (src) au PYTHONPATH
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 import grpc
 from ms_montantmax import montantmax_pb2, montantmax_pb2_grpc
 
@@ -15,5 +24,3 @@ if __name__ == '__main__':
     test_montantmax(30000)
     # Test avec un montant dépassant le plafond
     test_montantmax(60000)
-
-#python src/test/test_montantmax.py

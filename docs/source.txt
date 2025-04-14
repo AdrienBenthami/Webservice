@@ -1,0 +1,621 @@
+Webservice
+├── docs
+│   └── diagramme_activite.puml
+└── src
+    ├── __init__.py
+    ├── app
+    │   ├── __init__.py
+    │   └── app.py
+    ├── ms_banque
+    │   ├── Dockerfile
+    │   ├── Readme.md
+    │   ├── __init__.py
+    │   ├── requirements.txt
+    │   └── server.py
+    ├── ms_fournisseur
+    │   ├── Readme.md
+    │   ├── __init__.py
+    │   └── server.py
+    ├── ms_montantmax
+    │   ├── Dockerfile
+    │   ├── Readme.md
+    │   ├── __init__.py
+    │   ├── montantmax.proto
+    │   ├── montantmax_pb2.py
+    │   ├── montantmax_pb2_grpc.py
+    │   └── server.py
+    └── ms_profilrisque
+        ├── __init__.py
+        └── server.py
+
+================================================================================
+Chemin relatif: docs/diagramme_activite.puml
+@startuml
+|Client|
+start
+:Remplir le formulaire de demande de prêt\n(ID, infos personnelles, type, montant, description);
+:Soumettre le formulaire via API REST\nà l'Application Compagnon;
+
+|Application Compagnon|
+:Recevoir la demande de prêt;
+:Appeler MS MontantMax [gRPC] pour vérifier le montant;
+
+partition "MS MontantMax" {
+  :Vérifier que le montant demandé est ≤ plafond autorisé;
+  if (Montant > plafond?) then (Oui)
+    :Retourner échec;
+  else (Non)
+    :Retourner succès;
+  endif
+}
+
+if (Montant > plafond?) then (Oui)
+  :Préparer notification de refus :\n"Montant trop élevé";
+else (Non)
+  :Appeler MS ProfilRisque [GraphQL] avec les infos client;
+  partition "MS ProfilRisque" {
+    :Analyser le profil financier et déterminer le risque;
+    if (Risque = élevé \net Montant ≥ 20000?) then (Oui)
+      :Retourner "Risque élevé";
+    else (Non)
+      :Retourner "Risque acceptable";
+    endif
+  }
+  if (Risque élevé et Montant ≥ 20000?) then (Oui)
+    :Préparer notification de refus :\n"Risque trop élevé";
+  else (Non)
+    :Demander au client de soumettre un chèque de banque;
+    |Client|
+    :Envoyer le chèque de banque;
+    |Application Compagnon|
+    :Appeler MS Banque [SOAP] pour valider le chèque;
+    partition "MS Banque" {
+      :Simuler la validation du chèque;
+      if (Chèque valide?) then (Oui)
+        :Retourner "Chèque validé";
+      else (Non)
+        :Retourner "Chèque invalide";
+      endif
+    }
+    if (Chèque invalide?) then (Oui)
+      :Préparer notification de refus :\n"Chèque invalide";
+    else (Non)
+      :Appeler MS Fournisseur [REST] pour demander les fonds;
+      partition "MS Fournisseur" {
+        :Demander la libération des fonds;
+        :Transférer le montant sur le compte bancaire du client;
+        :Retourner succès;
+      }
+      :Préparer notification d'approbation :\n"Prêt approuvé et fonds transférés";
+    endif
+  endif
+endif
+
+:Notifier le client via REST;
+|Client|
+:Recevoir notification;
+stop
+@enduml
+
+================================================================================
+Chemin relatif: src/__init__.py
+
+================================================================================
+Chemin relatif: src/ms_fournisseur/__init__.py
+
+================================================================================
+Chemin relatif: src/ms_fournisseur/server.py
+# src/ms_fournisseur/app.py
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False
+
+@app.route('/fund', methods=['POST'])
+def fund_request():
+    data = request.json
+    loan_amount = data.get("loan_amount")
+    client_id = data.get("client_id")
+    # Simuler le transfert des fonds
+    return jsonify({
+        "status": "success", 
+        "message": f"Fonds de {loan_amount} transférés pour le client {client_id}"
+    }), 200
+
+if __name__ == '__main__':
+    app.run(port=5003)
+
+================================================================================
+Chemin relatif: src/ms_fournisseur/Readme.md
+Pour tester:
+```sh
+python server.py
+```
+
+Dans un autre terminal :
+```sh
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"loan_amount": 15000, "client_id": "client123"}' \
+     http://localhost:5003/fund
+```
+
+Réponse : 
+```sh
+{
+  "status": "success",
+  "message": "Fonds de 15000 transférés pour le client client123"
+}
+
+```
+================================================================================
+Chemin relatif: src/ms_banque/requirements.txt
+spyne
+lxml
+
+================================================================================
+Chemin relatif: src/ms_banque/__init__.py
+
+================================================================================
+Chemin relatif: src/ms_banque/Dockerfile
+# Utiliser une image Python 3.10 slim, compatible avec Spyne
+FROM python:3.10-slim
+
+# Définir le répertoire de travail dans le conteneur
+WORKDIR /app
+
+# Copier le fichier des dépendances dans le conteneur
+COPY requirements.txt .
+
+# Installer les dépendances
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt
+
+# Copier l'intégralité du code du microservice dans le conteneur
+COPY . .
+
+# Exposer le port utilisé par le service SOAP
+EXPOSE 5002
+
+# Lancer le service en exécutant le fichier server.py
+CMD ["python", "server.py"]
+
+================================================================================
+Chemin relatif: src/ms_banque/server.py
+# src/ms_banque/app.py
+from spyne import Application, rpc, ServiceBase, Unicode
+from spyne.protocol.soap import Soap11
+from spyne.server.wsgi import WsgiApplication
+
+class BanqueService(ServiceBase):
+    @rpc(Unicode, _returns=Unicode)
+    def ValidateCheck(ctx, check):
+        # Simulation de validation du chèque
+        if check == "valid":
+            return "Chèque validé"
+        else:
+            return "Chèque invalide"
+
+application = Application([BanqueService],
+                          tns='ms.banque',
+                          in_protocol=Soap11(validator='lxml'),
+                          out_protocol=Soap11())
+
+if __name__ == '__main__':
+    from wsgiref.simple_server import make_server
+    server = make_server('0.0.0.0', 5002, WsgiApplication(application))
+    print("MS Banque (SOAP) est en cours d'exécution sur le port 5002...")
+    server.serve_forever()
+
+================================================================================
+Chemin relatif: src/ms_banque/Readme.md
+Pour tester:
+```sh
+docker build -t ms_banque .
+docker run -d -p 5002:5002 ms_banque
+```
+
+Dans un autre terminal :
+```sh
+curl -X POST -H "Content-Type: text/xml" \
+-d '<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <ValidateCheck xmlns="ms.banque">
+      <check>valid</check>
+    </ValidateCheck>
+  </soap:Body>
+</soap:Envelope>' \
+http://localhost:5002
+```
+
+Réponse : 
+```sh
+<?xml version='1.0' encoding='UTF-8'?>
+<soap11env:Envelope xmlns:soap11env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="ms      .banque"><soap11env:Body><tns:ValidateCheckResponse><tns:ValidateCheckResult>Chèque validé</t      ns:ValidateCheckResult></tns:ValidateCheckResponse></soap11env:Body></soap11env:Envelope>
+```
+================================================================================
+Chemin relatif: src/app/__init__.py
+
+================================================================================
+Chemin relatif: src/app/app.py
+# src/app/app.py
+from flask import Flask, request, jsonify
+import requests
+import grpc
+# Importez ici les stubs gRPC générés (après compilation du proto)
+from ms_montantmax import montantmax_pb2
+from ms_montantmax import montantmax_pb2_grpc
+
+app = Flask(__name__)
+
+# Adresses et ports des microservices (à ajuster)
+MS_MONTANTMAX_ADDRESS = 'localhost:50051'
+MS_PROFILRISQUE_URL = 'http://localhost:5001/graphql'
+MS_BANQUE_URL = 'http://localhost:5002/soap'
+MS_FOURNISSEUR_URL = 'http://localhost:5003/fund'
+
+@app.route('/loan', methods=['POST'])
+def loan_request():
+    data = request.json
+    client_id = data.get("id")
+    personal_info = data.get("personal_info")
+    loan_type = data.get("loan_type")
+    loan_amount = data.get("loan_amount")
+    loan_desc = data.get("loan_desc")
+    
+    # 1. Vérifier le montant avec MS MontantMax (gRPC)
+    with grpc.insecure_channel(MS_MONTANTMAX_ADDRESS) as channel:
+        stub = montantmax_pb2_grpc.MontantMaxServiceStub(channel)
+        grpc_request = montantmax_pb2.LoanRequest(loan_amount=loan_amount)
+        grpc_response = stub.CheckLoan(grpc_request)
+    if not grpc_response.allowed:
+        return jsonify({"status": "refused", "reason": "Montant trop élevé"}), 400
+
+    # 2. Vérifier le profil de risque via MS ProfilRisque (GraphQL)
+    query = '''
+    query($loanAmount: Float!, $clientInfo: String!) {
+      riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo)
+    }
+    '''
+    variables = {"loanAmount": loan_amount, "clientInfo": personal_info}
+    response = requests.post(MS_PROFILRISQUE_URL, json={'query': query, 'variables': variables})
+    risk_data = response.json()
+    risk = risk_data['data']['riskProfile']
+    if risk == "elevé" and loan_amount >= 20000:
+        return jsonify({"status": "refused", "reason": "Risque trop élevé"}), 400
+
+    # 3. Demander au client de soumettre un chèque
+    # Ici, on suppose que le client envoie le chèque dans la même requête (pour simplifier)
+    check = data.get("check")
+    if not check:
+        return jsonify({"status": "pending", "message": "Veuillez soumettre un chèque de banque"}), 200
+
+    # 4. Valider le chèque via MS Banque (SOAP)
+    soap_payload = f"""<?xml version="1.0"?>
+    <Envelope>
+      <Body>
+        <ValidateCheck>
+          <check>{check}</check>
+        </ValidateCheck>
+      </Body>
+    </Envelope>"""
+    headers = {'Content-Type': 'text/xml'}
+    soap_response = requests.post(MS_BANQUE_URL, data=soap_payload, headers=headers)
+    if "invalid" in soap_response.text:
+        return jsonify({"status": "refused", "reason": "Chèque invalide"}), 400
+
+    # 5. Demander les fonds via MS Fournisseur (REST)
+    fund_response = requests.post(MS_FOURNISSEUR_URL, json={"loan_amount": loan_amount, "client_id": client_id})
+    if fund_response.status_code != 200:
+        return jsonify({"status": "refused", "reason": "Problème de financement"}), 400
+
+    return jsonify({"status": "approved", "message": "Prêt approuvé et fonds transférés"}), 200
+
+if __name__ == '__main__':
+    app.run(port=5000)
+
+================================================================================
+Chemin relatif: src/ms_montantmax/__init__.py
+
+================================================================================
+Chemin relatif: src/ms_montantmax/Dockerfile
+# Utiliser l'image Python 3.13-slim
+FROM python:3.13-slim
+
+# Définir le répertoire de travail dans le container sur /app
+WORKDIR /app
+
+# Ajouter le dossier contenant les modules générés au PYTHONPATH
+ENV PYTHONPATH="/app/ms_montantmax:${PYTHONPATH}"
+
+# Copier le dossier ms_montantmax dans /app
+COPY . ./ms_montantmax
+
+# Installer les dépendances Python (grpcio et grpcio-tools)
+RUN pip install --upgrade pip && \
+    pip install grpcio grpcio-tools
+
+# Exposer le port utilisé par le service gRPC
+EXPOSE 50051
+
+# Lancer le service gRPC en utilisant le module dans le package
+CMD ["python", "-m", "ms_montantmax.server"]
+
+================================================================================
+Chemin relatif: src/ms_montantmax/server.py
+# src/ms_montantmax/server.py
+from concurrent import futures
+import grpc
+from ms_montantmax import montantmax_pb2
+from ms_montantmax import montantmax_pb2_grpc
+
+# Définir la classe de service en étendant la classe générée par gRPC
+class MontantMaxService(montantmax_pb2_grpc.MontantMaxServiceServicer):
+    def CheckLoan(self, request, context):
+        # Par exemple, définissons un plafond autorisé
+        plafond = 50000
+        if request.loan_amount <= plafond:
+            return montantmax_pb2.LoanResponse(
+                allowed=True,
+                message="Demande acceptée"
+            )
+        else:
+            return montantmax_pb2.LoanResponse(
+                allowed=False,
+                message="Montant trop élevé"
+            )
+
+def serve():
+    # Créer un serveur gRPC avec un pool de threads
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    # Ajouter notre service au serveur
+    montantmax_pb2_grpc.add_MontantMaxServiceServicer_to_server(MontantMaxService(), server)
+    # Écouter sur le port 50051
+    server.add_insecure_port('[::]:50051')
+    server.start()
+    print("MS MontantMax gRPC server is running on port 50051")
+    server.wait_for_termination()
+
+if __name__ == '__main__':
+    serve()
+
+================================================================================
+Chemin relatif: src/ms_montantmax/montantmax_pb2.py
+# -*- coding: utf-8 -*-
+# Generated by the protocol buffer compiler.  DO NOT EDIT!
+# NO CHECKED-IN PROTOBUF GENCODE
+# source: montantmax.proto
+# Protobuf Python Version: 5.29.0
+"""Generated protocol buffer code."""
+from google.protobuf import descriptor as _descriptor
+from google.protobuf import descriptor_pool as _descriptor_pool
+from google.protobuf import runtime_version as _runtime_version
+from google.protobuf import symbol_database as _symbol_database
+from google.protobuf.internal import builder as _builder
+_runtime_version.ValidateProtobufRuntimeVersion(
+    _runtime_version.Domain.PUBLIC,
+    5,
+    29,
+    0,
+    '',
+    'montantmax.proto'
+)
+# @@protoc_insertion_point(imports)
+
+_sym_db = _symbol_database.Default()
+
+
+
+
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10montantmax.proto\x12\rms_montantmax\"\"\n\x0bLoanRequest\x12\x13\n\x0bloan_amount\x18\x01 \x01(\x02\"0\n\x0cLoanResponse\x12\x0f\n\x07\x61llowed\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2Y\n\x11MontantMaxService\x12\x44\n\tCheckLoan\x12\x1a.ms_montantmax.LoanRequest\x1a\x1b.ms_montantmax.LoanResponseb\x06proto3')
+
+_globals = globals()
+_builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'montantmax_pb2', _globals)
+if not _descriptor._USE_C_DESCRIPTORS:
+  DESCRIPTOR._loaded_options = None
+  _globals['_LOANREQUEST']._serialized_start=35
+  _globals['_LOANREQUEST']._serialized_end=69
+  _globals['_LOANRESPONSE']._serialized_start=71
+  _globals['_LOANRESPONSE']._serialized_end=119
+  _globals['_MONTANTMAXSERVICE']._serialized_start=121
+  _globals['_MONTANTMAXSERVICE']._serialized_end=210
+# @@protoc_insertion_point(module_scope)
+
+================================================================================
+Chemin relatif: src/ms_montantmax/Readme.md
+Pour tester:
+```sh
+docker build -t ms_montantmax .
+docker run -d -p 50051:50051 ms_montantmax
+
+```
+
+Dans un autre terminal :
+```sh
+grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
+```
+
+Réponse : 
+```sh
+{
+  "allowed": true,
+  "message": "Demande acceptée"
+}
+```
+
+
+Ou alors :
+Dans un autre terminal :
+```sh
+grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 60000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
+```
+
+Réponse : 
+```sh
+{
+  "message": "Montant trop élevé"
+}
+```
+================================================================================
+Chemin relatif: src/ms_montantmax/montantmax.proto
+// src/ms_montantmax/montantmax.proto
+syntax = "proto3";
+
+package ms_montantmax;
+
+// Définition du service gRPC
+service MontantMaxService {
+  // Méthode pour vérifier le montant du prêt
+  rpc CheckLoan(LoanRequest) returns (LoanResponse);
+}
+
+// Message de requête contenant le montant demandé
+message LoanRequest {
+  float loan_amount = 1;
+}
+
+// Message de réponse indiquant si le montant est autorisé et un message associé
+message LoanResponse {
+  bool allowed = 1;
+  string message = 2;
+}
+
+================================================================================
+Chemin relatif: src/ms_montantmax/montantmax_pb2_grpc.py
+# Generated by the gRPC Python protocol compiler plugin. DO NOT EDIT!
+"""Client and server classes corresponding to protobuf-defined services."""
+import grpc
+import warnings
+
+import montantmax_pb2 as montantmax__pb2
+
+GRPC_GENERATED_VERSION = '1.71.0'
+GRPC_VERSION = grpc.__version__
+_version_not_supported = False
+
+try:
+    from grpc._utilities import first_version_is_lower
+    _version_not_supported = first_version_is_lower(GRPC_VERSION, GRPC_GENERATED_VERSION)
+except ImportError:
+    _version_not_supported = True
+
+if _version_not_supported:
+    raise RuntimeError(
+        f'The grpc package installed is at version {GRPC_VERSION},'
+        + f' but the generated code in montantmax_pb2_grpc.py depends on'
+        + f' grpcio>={GRPC_GENERATED_VERSION}.'
+        + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
+        + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
+    )
+
+
+class MontantMaxServiceStub(object):
+    """Définition du service gRPC
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.CheckLoan = channel.unary_unary(
+                '/ms_montantmax.MontantMaxService/CheckLoan',
+                request_serializer=montantmax__pb2.LoanRequest.SerializeToString,
+                response_deserializer=montantmax__pb2.LoanResponse.FromString,
+                _registered_method=True)
+
+
+class MontantMaxServiceServicer(object):
+    """Définition du service gRPC
+    """
+
+    def CheckLoan(self, request, context):
+        """Méthode pour vérifier le montant du prêt
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_MontantMaxServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'CheckLoan': grpc.unary_unary_rpc_method_handler(
+                    servicer.CheckLoan,
+                    request_deserializer=montantmax__pb2.LoanRequest.FromString,
+                    response_serializer=montantmax__pb2.LoanResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'ms_montantmax.MontantMaxService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('ms_montantmax.MontantMaxService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class MontantMaxService(object):
+    """Définition du service gRPC
+    """
+
+    @staticmethod
+    def CheckLoan(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ms_montantmax.MontantMaxService/CheckLoan',
+            montantmax__pb2.LoanRequest.SerializeToString,
+            montantmax__pb2.LoanResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+================================================================================
+Chemin relatif: src/ms_profilrisque/__init__.py
+
+================================================================================
+Chemin relatif: src/ms_profilrisque/server.py
+# src/ms_profilrisque/app.py
+from flask import Flask, request, jsonify
+from graphene import ObjectType, String, Schema, Float
+
+class Query(ObjectType):
+    riskProfile = String(loanAmount=Float(required=True), clientInfo=String(required=True))
+
+    def resolve_riskProfile(root, info, loanAmount, clientInfo):
+        # Implémentez ici la logique d'analyse du risque.
+        # Par exemple, si le montant est élevé, on renvoie "elevé"
+        if loanAmount >= 20000:
+            return "elevé"
+        else:
+            return "acceptable"
+
+schema = Schema(query=Query)
+
+app = Flask(__name__)
+
+@app.route("/graphql", methods=["POST"])
+def graphql_server():
+    data = request.get_json()
+    result = schema.execute(data.get("query"), variables=data.get("variables"))
+    return jsonify(result.data)
+
+if __name__ == '__main__':
+    app.run(port=5001)
+
+================================================================================

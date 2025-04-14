@@ -24,17 +24,17 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10montantmax.proto\x12\nmontantmax\"\"\n\x0bLoanRequest\x12\x13\n\x0bloan_amount\x18\x01 \x01(\x02\"0\n\x0cLoanResponse\x12\x0f\n\x07\x61llowed\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2S\n\x11MontantMaxService\x12>\n\tCheckLoan\x12\x17.montantmax.LoanRequest\x1a\x18.montantmax.LoanResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10montantmax.proto\x12\rms_montantmax\"\"\n\x0bLoanRequest\x12\x13\n\x0bloan_amount\x18\x01 \x01(\x02\"0\n\x0cLoanResponse\x12\x0f\n\x07\x61llowed\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2Y\n\x11MontantMaxService\x12\x44\n\tCheckLoan\x12\x1a.ms_montantmax.LoanRequest\x1a\x1b.ms_montantmax.LoanResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'montantmax_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_LOANREQUEST']._serialized_start=32
-  _globals['_LOANREQUEST']._serialized_end=66
-  _globals['_LOANRESPONSE']._serialized_start=68
-  _globals['_LOANRESPONSE']._serialized_end=116
-  _globals['_MONTANTMAXSERVICE']._serialized_start=118
-  _globals['_MONTANTMAXSERVICE']._serialized_end=201
+  _globals['_LOANREQUEST']._serialized_start=35
+  _globals['_LOANREQUEST']._serialized_end=69
+  _globals['_LOANRESPONSE']._serialized_start=71
+  _globals['_LOANRESPONSE']._serialized_end=119
+  _globals['_MONTANTMAXSERVICE']._serialized_start=121
+  _globals['_MONTANTMAXSERVICE']._serialized_end=210
 # @@protoc_insertion_point(module_scope)

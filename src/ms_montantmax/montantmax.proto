@@ -1,16 +1,20 @@
 // src/ms_montantmax/montantmax.proto
 syntax = "proto3";
 
-package montantmax;
+package ms_montantmax;
 
+// Définition du service gRPC
 service MontantMaxService {
-  rpc CheckLoan (LoanRequest) returns (LoanResponse);
+  // Méthode pour vérifier le montant du prêt
+  rpc CheckLoan(LoanRequest) returns (LoanResponse);
 }
 
+// Message de requête contenant le montant demandé
 message LoanRequest {
   float loan_amount = 1;
 }
 
+// Message de réponse indiquant si le montant est autorisé et un message associé
 message LoanResponse {
   bool allowed = 1;
   string message = 2;

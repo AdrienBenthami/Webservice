@@ -3,8 +3,8 @@ from flask import Flask, request, jsonify
 import requests
 import grpc
 # Importez ici les stubs gRPC générés (après compilation du proto)
-import montantmax_pb2
-import montantmax_pb2_grpc
+from ms_montantmax import montantmax_pb2
+from ms_montantmax import montantmax_pb2_grpc
 
 app = Flask(__name__)
 
