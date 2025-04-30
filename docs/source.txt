@@ -1,36 +1,70 @@
-Projetweb
+Webservice
+├── .pytest_cache
+│   ├── CACHEDIR.TAG
+│   ├── README.md
+│   └── v
+│       └── cache
+│           ├── lastfailed
+│           ├── nodeids
+│           └── stepwise
 ├── compose.yaml
+├── conftest.py
 ├── docs
 │   └── diagramme_activite.puml
-└── src
-    ├── __init__.py
-    ├── app
-    │   ├── __init__.py
-    │   └── app.py
-    ├── ms_banque
-    │   ├── Dockerfile
-    │   ├── Readme.md
-    │   ├── __init__.py
-    │   ├── requirements.txt
-    │   └── server.py
-    ├── ms_fournisseur
-    │   ├── Dockerfile
-    │   ├── Readme.md
-    │   ├── __init__.py
-    │   └── server.py
-    ├── ms_montantmax
-    │   ├── Dockerfile
-    │   ├── Readme.md
-    │   ├── __init__.py
-    │   ├── montantmax.proto
-    │   ├── montantmax_pb2.py
-    │   ├── montantmax_pb2_grpc.py
-    │   └── server.py
-    └── ms_profilrisque
-        ├── Dockerfile
-        ├── Readme.md
-        ├── __init__.py
-        └── server.py
+├── pytest.ini
+├── src
+│   ├── __init__.py
+│   ├── app
+│   │   ├── .pytest_cache
+│   │   │   ├── CACHEDIR.TAG
+│   │   │   ├── README.md
+│   │   │   └── v
+│   │   │       └── cache
+│   │   │           ├── lastfailed
+│   │   │           ├── nodeids
+│   │   │           └── stepwise
+│   │   ├── __init__.py
+│   │   └── app.py
+│   ├── ms_banque
+│   │   ├── Dockerfile
+│   │   ├── Readme.md
+│   │   ├── __init__.py
+│   │   ├── requirements.txt
+│   │   └── server.py
+│   ├── ms_fournisseur
+│   │   ├── Dockerfile
+│   │   ├── Readme.md
+│   │   ├── __init__.py
+│   │   └── server.py
+│   ├── ms_montantmax
+│   │   ├── Dockerfile
+│   │   ├── Readme.md
+│   │   ├── __init__.py
+│   │   ├── montantmax.proto
+│   │   ├── montantmax_pb2.py
+│   │   ├── montantmax_pb2_grpc.py
+│   │   └── server.py
+│   └── ms_profilrisque
+│       ├── Dockerfile
+│       ├── Readme.md
+│       ├── __init__.py
+│       └── server.py
+└── tests
+    └── test_app.py
+
+================================================================================
+Chemin relatif: conftest.py
+# conftest.py
+import sys, os
+
+# 1) ajouter src/ au PYTHONPATH pour que "from app.app import app" et
+#    "from ms_montantmax import montantmax_pb2_grpc" fonctionnent
+sys.path.insert(0, os.path.abspath(os.path.join(__file__, 'src')))
+
+# 2) ajouter src/ms_montantmax au PYTHONPATH pour que l'import ABSOLU
+#    "import montantmax_pb2" (dans montantmax_pb2_grpc.py) trouve bien
+#    le fichier montantmax_pb2.py
+sys.path.insert(0, os.path.abspath(os.path.join(__file__, 'src', 'ms_montantmax')))
 
 ================================================================================
 Chemin relatif: compose.yaml
@@ -123,6 +157,14 @@ networks:
   webservice:
     driver: bridge
 ================================================================================
+Chemin relatif: pytest.ini
+[pytest]
+minversion = 6.0
+addopts = -ra -q
+testpaths = tests
+# Empêche pytest de descendre dans src/test
+norecursedirs = src/test
+================================================================================
 Chemin relatif: docs/diagramme_activite.puml
 @startuml
 |Client|
@@ -192,130 +234,165 @@ stop
 @enduml
 
 ================================================================================
+Chemin relatif: tests/test_app.py
+import pytest
+from flask import json
+import grpc
+import requests
+from app.app import app as flask_app
+from ms_montantmax import montantmax_pb2, montantmax_pb2_grpc
+
+# Dummy gRPC response
+class DummyLoanResponse:
+    def __init__(self, allowed, message):
+        self.allowed = allowed
+        self.message = message
+
+class FakeStub:
+    def __init__(self, _):
+        pass
+    def CheckLoan(self, request):
+        # Approve amounts <=50000, refuse otherwise
+        if request.loan_amount <= 50000:
+            return DummyLoanResponse(True, "Demande acceptée")
+        return DummyLoanResponse(False, "Montant trop élevé")
+
+# Dummy HTTP responses for GraphQL, SOAP, and REST
+class DummyResponse:
+    def __init__(self, status_code=200, json_data=None, text="", ok=True):
+        self.status_code = status_code
+        self._json = json_data or {}
+        self.text = text
+    def json(self):
+        return self._json
+    @property
+    def ok(self):
+        return self.status_code == 200
+
+@pytest.fixture(autouse=True)
+def mock_services(monkeypatch):
+    # Mock gRPC channel and stub
+    monkeypatch.setattr(grpc, 'insecure_channel', lambda addr: None)
+    monkeypatch.setattr(montantmax_pb2_grpc, 'MontantMaxServiceStub', FakeStub)
+
+    # Default GraphQL risk acceptable for amounts <20000, risk élevé otherwise
+    def fake_post(url, **kwargs):
+        if 'graphql' in url:
+            amt = kwargs['json']['variables']['loanAmount']
+            risk = 'elevé' if amt >= 20000 else 'acceptable'
+            return DummyResponse(status_code=200, json_data={'riskProfile': risk})
+        if 'soap' in url:
+            body = kwargs.get('data', '')
+            # if <check>valid</check> present, valid; else invalid
+            return DummyResponse(status_code=200, text='<ValidateCheckResult>Chèque validé</ValidateCheckResult>')
+        if 'fundTransfers' in url:
+            return DummyResponse(status_code=200, json_data={'status': 'success'})
+        return DummyResponse(status_code=404)
+    monkeypatch.setattr(requests, 'post', fake_post)
+
+@pytest.fixture
+def client():
+    with flask_app.test_client() as c:
+        yield c
+
+# Test missing JSON data
+def test_missing_data(client):
+    resp = client.post('/loan')
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert data['status'] == 'error'
+    assert 'Données de requête manquantes' in data['reason']
+
+# Test invalid loan_amount type
+def test_invalid_amount_type(client):
+    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 'abc'})
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert data['status'] == 'error'
+    assert 'Le montant doit être un nombre' in data['reason']
+
+# Test amount too high by gRPC
+def test_grpc_refuse(client):
+    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 60000})
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert data['status'] == 'refused'
+    assert 'Montant trop élevé' in data['reason']
+
+# Test risk refusal for high risk and high amount
+def test_risk_refusal(client):
+    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 25000})
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert data['status'] == 'refused'
+    assert 'Risque trop élevé' in data['reason']
+
+# Test pending for missing check
+def test_pending_no_check(client):
+    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 10000})
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data['status'] == 'pending'
+    assert 'Veuillez soumettre un chèque' in data['message']
+
+# Test invalid check
+def test_invalid_check(client, mock_services, monkeypatch):
+    # override SOAP to return invalid
+    def fake_soap(url, **kwargs):
+        return DummyResponse(status_code=200, text='invalid')
+    monkeypatch.setattr(requests, 'post', fake_soap)
+    payload = {'id': '1', 'personal_info': 'x', 'loan_amount': 10000, 'check': 'anything'}
+    resp = client.post('/loan', json=payload)
+    data = resp.get_json()
+    assert resp.status_code == 400
+    assert data['status'] == 'refused'
+    assert 'Chèque invalide' in data['reason']
+
+# Test successful flow
+def test_success_flow(client):
+    payload = {'id': '1', 'personal_info': 'x', 'loan_amount': 10000, 'check': 'valid'}
+    resp = client.post('/loan', json=payload)
+    data = resp.get_json()
+    assert resp.status_code == 200
+    assert data['status'] == 'approved'
+    assert 'Prêt approuvé' in data['message']
+
+================================================================================
+Chemin relatif: .pytest_cache/CACHEDIR.TAG
+Signature: 8a477f597d28d172789f06886806bc55
+# This file is a cache directory tag created by pytest.
+# For information about cache directory tags, see:
+#	https://bford.info/cachedir/spec.html
+
+================================================================================
+Chemin relatif: .pytest_cache/README.md
+# pytest cache directory #
+
+This directory contains data from the pytest's cache plugin,
+which provides the `--lf` and `--ff` options, as well as the `cache` fixture.
+
+**Do not** commit this to version control.
+
+See [the docs](https://docs.pytest.org/en/stable/how-to/cache.html) for more information.
+
+================================================================================
+Chemin relatif: .pytest_cache/v/cache/stepwise
+[]
+================================================================================
+Chemin relatif: .pytest_cache/v/cache/lastfailed
+{
+  "src/test/test_montantmax.py": true,
+  "tests/test_app.py": true
+}
+================================================================================
+Chemin relatif: .pytest_cache/v/cache/nodeids
+[]
+================================================================================
 Chemin relatif: src/__init__.py
-
-================================================================================
-Chemin relatif: src/ms_banque/__init__.py
-
-================================================================================
-Chemin relatif: src/ms_banque/Readme.md
-Pour tester:
-```sh
-docker build -t ms_banque .
-docker run -d -p 5002:5002 ms_banque
-```
-
-Dans un autre terminal :
-```sh
-curl -X POST -H "Content-Type: text/xml" \
--d '<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <ValidateCheck xmlns="ms.banque">
-      <check>valid</check>
-    </ValidateCheck>
-  </soap:Body>
-</soap:Envelope>' \
-http://localhost:5002
-```
-
-Réponse : 
-```sh
-<?xml version='1.0' encoding='UTF-8'?>
-<soap11env:Envelope xmlns:soap11env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="ms      .banque"><soap11env:Body><tns:ValidateCheckResponse><tns:ValidateCheckResult>Chèque validé</t      ns:ValidateCheckResult></tns:ValidateCheckResponse></soap11env:Body></soap11env:Envelope>
-```
-================================================================================
-Chemin relatif: src/ms_banque/Dockerfile
-# Utiliser une image Python 3.10 slim, compatible avec Spyne
-FROM python:3.10-slim
-
-# Définir le répertoire de travail dans le conteneur
-WORKDIR /app
-
-# Installer curl et netcat-openbsd pour les healthchecks
-RUN apt-get update && apt-get install -y netcat-openbsd
-
-# Copier le fichier des dépendances dans le conteneur
-COPY requirements.txt .
-
-# Installer les dépendances
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
-
-# Copier l'intégralité du code du microservice dans le conteneur
-COPY . .
-
-# Exposer le port utilisé par le service SOAP
-EXPOSE 5002
-
-# Lancer le service en exécutant le fichier server.py
-CMD ["python", "server.py"]
-
-================================================================================
-Chemin relatif: src/ms_banque/requirements.txt
-spyne
-lxml
-
-================================================================================
-Chemin relatif: src/ms_banque/server.py
-# src/ms_banque/app.py
-from spyne import Application, rpc, ServiceBase, Unicode
-from spyne.protocol.soap import Soap11
-from spyne.server.wsgi import WsgiApplication
-
-class BanqueService(ServiceBase):
-    @rpc(Unicode, _returns=Unicode)
-    def ValidateCheck(ctx, check):
-        # Simulation de validation du chèque
-        if check == "valid":
-            return "Chèque validé"
-        else:
-            return "Chèque invalide"
-
-application = Application([BanqueService],
-                          tns='ms.banque',
-                          in_protocol=Soap11(validator='lxml'),
-                          out_protocol=Soap11())
-
-if __name__ == '__main__':
-    from wsgiref.simple_server import make_server
-    server = make_server('0.0.0.0', 5002, WsgiApplication(application))
-    server.serve_forever()
 
 ================================================================================
 Chemin relatif: src/ms_fournisseur/__init__.py
 
-================================================================================
-Chemin relatif: src/ms_fournisseur/Readme.md
-Pour tester:
-```sh
-python server.py
-```
-Ou en docker :
-```sh
-docker build -t ms_fournisseur .
-docker run -d -p 5003:5003 ms_fournisseur
-```
-
-Dans un autre terminal :
-```sh
-curl http://localhost:5003/health
-```
-
-```sh
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"loan_amount": 15000, "client_id": "client123"}' \
-  http://localhost:5003/fundTransfers
-```
-
-Réponse : 
-```sh
-{
-  "status": "success",
-  "message": "Fonds de 15000 transférés pour le client client123"
-}
-
-```
 ================================================================================
 Chemin relatif: src/ms_fournisseur/Dockerfile
 # Utiliser une image Python 3.10 slim
@@ -383,97 +460,124 @@ if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5003)
 
 ================================================================================
-Chemin relatif: src/ms_profilrisque/__init__.py
-
-================================================================================
-Chemin relatif: src/ms_profilrisque/Readme.md
+Chemin relatif: src/ms_fournisseur/Readme.md
 Pour tester:
 ```sh
 python server.py
 ```
 Ou en docker :
 ```sh
-docker build -t ms_profilrisque .
-docker run -d -p 5001:5001 ms_profilrisque
+docker build -t ms_fournisseur .
+docker run -d -p 5003:5003 ms_fournisseur
 ```
 
 Dans un autre terminal :
 ```sh
-curl http://localhost:5001/health
+curl http://localhost:5003/health
 ```
 
 ```sh
 curl -X POST -H "Content-Type: application/json" \
--d '{
-      "query": "query($loanAmount: Float!, $clientInfo: String!){ riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo) }",
-      "variables": {"loanAmount": 25000, "clientInfo": "Information client exemple"}
-    }' \
-http://localhost:5001/graphql
-
+  -d '{"loan_amount": 15000, "client_id": "client123"}' \
+  http://localhost:5003/fundTransfers
 ```
 
-Réponse : hrg
+Réponse : 
 ```sh
-{"riskProfile":"elev\u00e9"}
+{
+  "status": "success",
+  "message": "Fonds de 15000 transférés pour le client client123"
+}
+
 ```
 ================================================================================
-Chemin relatif: src/ms_profilrisque/Dockerfile
-# Utiliser une image Python 3.10 slim
-FROM python:3.13-slim
+Chemin relatif: src/ms_banque/requirements.txt
+spyne
+lxml
+
+================================================================================
+Chemin relatif: src/ms_banque/__init__.py
+
+================================================================================
+Chemin relatif: src/ms_banque/Dockerfile
+# Utiliser une image Python 3.10 slim, compatible avec Spyne
+FROM python:3.10-slim
 
 # Définir le répertoire de travail dans le conteneur
 WORKDIR /app
 
 # Installer curl et netcat-openbsd pour les healthchecks
-RUN apt-get update && apt-get install -y curl
+RUN apt-get update && apt-get install -y netcat-openbsd
 
-# Installer les dépendances nécessaires : Flask et Graphene
+# Copier le fichier des dépendances dans le conteneur
+COPY requirements.txt .
+
+# Installer les dépendances
 RUN pip install --upgrade pip && \
-    pip install flask graphene
+    pip install -r requirements.txt
 
-# Copier le code source dans le conteneur
+# Copier l'intégralité du code du microservice dans le conteneur
 COPY . .
 
-# Exposer le port utilisé (ici 5001)
-EXPOSE 5001
+# Exposer le port utilisé par le service SOAP
+EXPOSE 5002
 
-# Lancer l’application
+# Lancer le service en exécutant le fichier server.py
 CMD ["python", "server.py"]
 
 ================================================================================
-Chemin relatif: src/ms_profilrisque/server.py
-# src/ms_profilrisque/app.py
-from flask import Flask, request, jsonify
-from graphene import ObjectType, String, Schema, Float
+Chemin relatif: src/ms_banque/server.py
+# src/ms_banque/app.py
+from spyne import Application, rpc, ServiceBase, Unicode
+from spyne.protocol.soap import Soap11
+from spyne.server.wsgi import WsgiApplication
 
-class Query(ObjectType):
-    riskProfile = String(loanAmount=Float(required=True), clientInfo=String(required=True))
-
-    def resolve_riskProfile(root, info, loanAmount, clientInfo):
-        # Implémentez ici la logique d'analyse du risque.
-        # Par exemple, si le montant est élevé, on renvoie "elevé"
-        if loanAmount >= 20000:
-            return "elevé"
+class BanqueService(ServiceBase):
+    @rpc(Unicode, _returns=Unicode)
+    def ValidateCheck(ctx, check):
+        # Simulation de validation du chèque
+        if check == "valid":
+            return "Chèque validé"
         else:
-            return "acceptable"
+            return "Chèque invalide"
 
-schema = Schema(query=Query)
-
-app = Flask(__name__)
-
-@app.route("/graphql", methods=["POST"])
-def graphql_server():
-    data = request.get_json()
-    result = schema.execute(data.get("query"), variables=data.get("variables"))
-    return jsonify(result.data)
-
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "ok"}), 200
+application = Application([BanqueService],
+                          tns='ms.banque',
+                          in_protocol=Soap11(validator='lxml'),
+                          out_protocol=Soap11())
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5001)
+    from wsgiref.simple_server import make_server
+    server = make_server('0.0.0.0', 5002, WsgiApplication(application))
+    server.serve_forever()
 
+================================================================================
+Chemin relatif: src/ms_banque/Readme.md
+Pour tester:
+```sh
+docker build -t ms_banque .
+docker run -d -p 5002:5002 ms_banque
+```
+
+Dans un autre terminal :
+```sh
+curl -X POST -H "Content-Type: text/xml" \
+-d '<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <ValidateCheck xmlns="ms.banque">
+      <check>valid</check>
+    </ValidateCheck>
+  </soap:Body>
+</soap:Envelope>' \
+http://localhost:5002
+```
+
+Réponse : 
+```sh
+<?xml version='1.0' encoding='UTF-8'?>
+<soap11env:Envelope xmlns:soap11env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="ms      .banque"><soap11env:Body><tns:ValidateCheckResponse><tns:ValidateCheckResult>Chèque validé</t      ns:ValidateCheckResult></tns:ValidateCheckResponse></soap11env:Body></soap11env:Envelope>
+```
 ================================================================================
 Chemin relatif: src/app/__init__.py
 
@@ -624,6 +728,209 @@ if __name__ == '__main__':
     app.run(port=5000)
 
 ================================================================================
+Chemin relatif: src/app/.pytest_cache/CACHEDIR.TAG
+Signature: 8a477f597d28d172789f06886806bc55
+# This file is a cache directory tag created by pytest.
+# For information about cache directory tags, see:
+#	https://bford.info/cachedir/spec.html
+
+================================================================================
+Chemin relatif: src/app/.pytest_cache/README.md
+# pytest cache directory #
+
+This directory contains data from the pytest's cache plugin,
+which provides the `--lf` and `--ff` options, as well as the `cache` fixture.
+
+**Do not** commit this to version control.
+
+See [the docs](https://docs.pytest.org/en/stable/how-to/cache.html) for more information.
+
+================================================================================
+Chemin relatif: src/app/.pytest_cache/v/cache/stepwise
+[]
+================================================================================
+Chemin relatif: src/app/.pytest_cache/v/cache/lastfailed
+{
+  "test_app.py": true
+}
+================================================================================
+Chemin relatif: src/app/.pytest_cache/v/cache/nodeids
+[]
+================================================================================
+Chemin relatif: src/ms_montantmax/__init__.py
+
+================================================================================
+Chemin relatif: src/ms_montantmax/Dockerfile
+# Utiliser l'image Python 3.13-slim
+FROM python:3.13-slim
+
+# Définir le répertoire de travail dans le container sur /app
+WORKDIR /app
+
+# Installer curl et netcat-openbsd pour les healthchecks
+RUN apt-get update && apt-get install -y netcat-openbsd
+
+# Ajouter le dossier contenant les modules générés au PYTHONPATH
+ENV PYTHONPATH="/app/ms_montantmax:${PYTHONPATH}"
+
+# Copier le dossier ms_montantmax dans /app
+COPY . ./ms_montantmax
+
+# Installer les dépendances Python (grpcio et grpcio-tools)
+RUN pip install --upgrade pip && \
+    pip install grpcio grpcio-tools
+
+# Exposer le port utilisé par le service gRPC
+EXPOSE 50051
+
+# Lancer le service gRPC en utilisant le module dans le package
+CMD ["python", "-m", "ms_montantmax.server"]
+
+================================================================================
+Chemin relatif: src/ms_montantmax/server.py
+# src/ms_montantmax/server.py
+from concurrent import futures
+import grpc
+from ms_montantmax import montantmax_pb2
+from ms_montantmax import montantmax_pb2_grpc
+
+# Définir la classe de service en étendant la classe générée par gRPC
+class MontantMaxService(montantmax_pb2_grpc.MontantMaxServiceServicer):
+    def CheckLoan(self, request, context):
+        # Par exemple, définissons un plafond autorisé
+        plafond = 50000
+        if request.loan_amount <= plafond:
+            return montantmax_pb2.LoanResponse(
+                allowed=True,
+                message="Demande acceptée"
+            )
+        else:
+            return montantmax_pb2.LoanResponse(
+                allowed=False,
+                message="Montant trop élevé"
+            )
+
+def serve():
+    # Créer un serveur gRPC avec un pool de threads
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    # Ajouter notre service au serveur
+    montantmax_pb2_grpc.add_MontantMaxServiceServicer_to_server(MontantMaxService(), server)
+    # Écouter sur le port 5001
+    server.add_insecure_port('[::]:50051')
+    server.start()
+    print("MS MontantMax gRPC server is running on port 50051")
+    server.wait_for_termination()
+
+if __name__ == '__main__':
+    serve()
+
+================================================================================
+Chemin relatif: src/ms_montantmax/montantmax_pb2.py
+# -*- coding: utf-8 -*-
+# Generated by the protocol buffer compiler.  DO NOT EDIT!
+# NO CHECKED-IN PROTOBUF GENCODE
+# source: montantmax.proto
+# Protobuf Python Version: 5.29.0
+"""Generated protocol buffer code."""
+from google.protobuf import descriptor as _descriptor
+from google.protobuf import descriptor_pool as _descriptor_pool
+from google.protobuf import runtime_version as _runtime_version
+from google.protobuf import symbol_database as _symbol_database
+from google.protobuf.internal import builder as _builder
+_runtime_version.ValidateProtobufRuntimeVersion(
+    _runtime_version.Domain.PUBLIC,
+    5,
+    29,
+    0,
+    '',
+    'montantmax.proto'
+)
+# @@protoc_insertion_point(imports)
+
+_sym_db = _symbol_database.Default()
+
+
+
+
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10montantmax.proto\x12\rms_montantmax\"\"\n\x0bLoanRequest\x12\x13\n\x0bloan_amount\x18\x01 \x01(\x02\"0\n\x0cLoanResponse\x12\x0f\n\x07\x61llowed\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2Y\n\x11MontantMaxService\x12\x44\n\tCheckLoan\x12\x1a.ms_montantmax.LoanRequest\x1a\x1b.ms_montantmax.LoanResponseb\x06proto3')
+
+_globals = globals()
+_builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'montantmax_pb2', _globals)
+if not _descriptor._USE_C_DESCRIPTORS:
+  DESCRIPTOR._loaded_options = None
+  _globals['_LOANREQUEST']._serialized_start=35
+  _globals['_LOANREQUEST']._serialized_end=69
+  _globals['_LOANRESPONSE']._serialized_start=71
+  _globals['_LOANRESPONSE']._serialized_end=119
+  _globals['_MONTANTMAXSERVICE']._serialized_start=121
+  _globals['_MONTANTMAXSERVICE']._serialized_end=210
+# @@protoc_insertion_point(module_scope)
+
+================================================================================
+Chemin relatif: src/ms_montantmax/Readme.md
+Pour tester:
+```sh
+docker build -t ms_montantmax .
+docker run -d -p 50051:50051 ms_montantmax
+
+```
+
+Dans un autre terminal : (depuis ms_montantmax)
+```sh
+grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
+```
+Dans un autre terminal : (depuis le fichier racines)
+```sh
+grpcurl -plaintext -proto src/ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
+```
+
+Réponse : 
+```sh
+{
+  "allowed": true,
+  "message": "Demande acceptée"
+}
+```
+
+
+Ou alors :
+Dans un autre terminal :
+```sh
+grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 60000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
+```
+
+Réponse : 
+```sh
+{
+  "message": "Montant trop élevé"
+}
+```
+================================================================================
+Chemin relatif: src/ms_montantmax/montantmax.proto
+// src/ms_montantmax/montantmax.proto
+syntax = "proto3";
+
+package ms_montantmax;
+
+// Définition du service gRPC
+service MontantMaxService {
+  // Méthode pour vérifier le montant du prêt
+  rpc CheckLoan(LoanRequest) returns (LoanResponse);
+}
+
+// Message de requête contenant le montant demandé
+message LoanRequest {
+  float loan_amount = 1;
+}
+
+// Message de réponse indiquant si le montant est autorisé et un message associé
+message LoanResponse {
+  bool allowed = 1;
+  string message = 2;
+}
+
+================================================================================
 Chemin relatif: src/ms_montantmax/montantmax_pb2_grpc.py
 # Generated by the gRPC Python protocol compiler plugin. DO NOT EDIT!
 """Client and server classes corresponding to protobuf-defined services."""
@@ -728,177 +1035,95 @@ class MontantMaxService(object):
             _registered_method=True)
 
 ================================================================================
-Chemin relatif: src/ms_montantmax/montantmax.proto
-// src/ms_montantmax/montantmax.proto
-syntax = "proto3";
-
-package ms_montantmax;
-
-// Définition du service gRPC
-service MontantMaxService {
-  // Méthode pour vérifier le montant du prêt
-  rpc CheckLoan(LoanRequest) returns (LoanResponse);
-}
-
-// Message de requête contenant le montant demandé
-message LoanRequest {
-  float loan_amount = 1;
-}
-
-// Message de réponse indiquant si le montant est autorisé et un message associé
-message LoanResponse {
-  bool allowed = 1;
-  string message = 2;
-}
+Chemin relatif: src/ms_profilrisque/__init__.py
 
 ================================================================================
-Chemin relatif: src/ms_montantmax/__init__.py
-
-================================================================================
-Chemin relatif: src/ms_montantmax/Readme.md
-Pour tester:
-```sh
-docker build -t ms_montantmax .
-docker run -d -p 50051:50051 ms_montantmax
-
-```
-
-Dans un autre terminal : (depuis ms_montantmax)
-```sh
-grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
-```
-Dans un autre terminal : (depuis le fichier racines)
-```sh
-grpcurl -plaintext -proto src/ms_montantmax/montantmax.proto -d '{"loan_amount": 30000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
-```
-
-Réponse : 
-```sh
-{
-  "allowed": true,
-  "message": "Demande acceptée"
-}
-```
-
-
-Ou alors :
-Dans un autre terminal :
-```sh
-grpcurl -plaintext -proto ms_montantmax/montantmax.proto -d '{"loan_amount": 60000}' localhost:50051 ms_montantmax.MontantMaxService/CheckLoan
-```
-
-Réponse : 
-```sh
-{
-  "message": "Montant trop élevé"
-}
-```
-================================================================================
-Chemin relatif: src/ms_montantmax/montantmax_pb2.py
-# -*- coding: utf-8 -*-
-# Generated by the protocol buffer compiler.  DO NOT EDIT!
-# NO CHECKED-IN PROTOBUF GENCODE
-# source: montantmax.proto
-# Protobuf Python Version: 5.29.0
-"""Generated protocol buffer code."""
-from google.protobuf import descriptor as _descriptor
-from google.protobuf import descriptor_pool as _descriptor_pool
-from google.protobuf import runtime_version as _runtime_version
-from google.protobuf import symbol_database as _symbol_database
-from google.protobuf.internal import builder as _builder
-_runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC,
-    5,
-    29,
-    0,
-    '',
-    'montantmax.proto'
-)
-# @@protoc_insertion_point(imports)
-
-_sym_db = _symbol_database.Default()
-
-
-
-
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10montantmax.proto\x12\rms_montantmax\"\"\n\x0bLoanRequest\x12\x13\n\x0bloan_amount\x18\x01 \x01(\x02\"0\n\x0cLoanResponse\x12\x0f\n\x07\x61llowed\x18\x01 \x01(\x08\x12\x0f\n\x07message\x18\x02 \x01(\t2Y\n\x11MontantMaxService\x12\x44\n\tCheckLoan\x12\x1a.ms_montantmax.LoanRequest\x1a\x1b.ms_montantmax.LoanResponseb\x06proto3')
-
-_globals = globals()
-_builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'montantmax_pb2', _globals)
-if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
-  _globals['_LOANREQUEST']._serialized_start=35
-  _globals['_LOANREQUEST']._serialized_end=69
-  _globals['_LOANRESPONSE']._serialized_start=71
-  _globals['_LOANRESPONSE']._serialized_end=119
-  _globals['_MONTANTMAXSERVICE']._serialized_start=121
-  _globals['_MONTANTMAXSERVICE']._serialized_end=210
-# @@protoc_insertion_point(module_scope)
-
-================================================================================
-Chemin relatif: src/ms_montantmax/Dockerfile
-# Utiliser l'image Python 3.13-slim
+Chemin relatif: src/ms_profilrisque/Dockerfile
+# Utiliser une image Python 3.10 slim
 FROM python:3.13-slim
 
-# Définir le répertoire de travail dans le container sur /app
+# Définir le répertoire de travail dans le conteneur
 WORKDIR /app
 
 # Installer curl et netcat-openbsd pour les healthchecks
-RUN apt-get update && apt-get install -y netcat-openbsd
+RUN apt-get update && apt-get install -y curl
 
-# Ajouter le dossier contenant les modules générés au PYTHONPATH
-ENV PYTHONPATH="/app/ms_montantmax:${PYTHONPATH}"
-
-# Copier le dossier ms_montantmax dans /app
-COPY . ./ms_montantmax
-
-# Installer les dépendances Python (grpcio et grpcio-tools)
+# Installer les dépendances nécessaires : Flask et Graphene
 RUN pip install --upgrade pip && \
-    pip install grpcio grpcio-tools
+    pip install flask graphene
 
-# Exposer le port utilisé par le service gRPC
-EXPOSE 50051
+# Copier le code source dans le conteneur
+COPY . .
 
-# Lancer le service gRPC en utilisant le module dans le package
-CMD ["python", "-m", "ms_montantmax.server"]
+# Exposer le port utilisé (ici 5001)
+EXPOSE 5001
+
+# Lancer l’application
+CMD ["python", "server.py"]
 
 ================================================================================
-Chemin relatif: src/ms_montantmax/server.py
-# src/ms_montantmax/server.py
-from concurrent import futures
-import grpc
-from ms_montantmax import montantmax_pb2
-from ms_montantmax import montantmax_pb2_grpc
+Chemin relatif: src/ms_profilrisque/server.py
+# src/ms_profilrisque/app.py
+from flask import Flask, request, jsonify
+from graphene import ObjectType, String, Schema, Float
 
-# Définir la classe de service en étendant la classe générée par gRPC
-class MontantMaxService(montantmax_pb2_grpc.MontantMaxServiceServicer):
-    def CheckLoan(self, request, context):
-        # Par exemple, définissons un plafond autorisé
-        plafond = 50000
-        if request.loan_amount <= plafond:
-            return montantmax_pb2.LoanResponse(
-                allowed=True,
-                message="Demande acceptée"
-            )
+class Query(ObjectType):
+    riskProfile = String(loanAmount=Float(required=True), clientInfo=String(required=True))
+
+    def resolve_riskProfile(root, info, loanAmount, clientInfo):
+        # Implémentez ici la logique d'analyse du risque.
+        # Par exemple, si le montant est élevé, on renvoie "elevé"
+        if loanAmount >= 20000:
+            return "elevé"
         else:
-            return montantmax_pb2.LoanResponse(
-                allowed=False,
-                message="Montant trop élevé"
-            )
+            return "acceptable"
 
-def serve():
-    # Créer un serveur gRPC avec un pool de threads
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    # Ajouter notre service au serveur
-    montantmax_pb2_grpc.add_MontantMaxServiceServicer_to_server(MontantMaxService(), server)
-    # Écouter sur le port 5001
-    server.add_insecure_port('[::]:50051')
-    server.start()
-    print("MS MontantMax gRPC server is running on port 50051")
-    server.wait_for_termination()
+schema = Schema(query=Query)
+
+app = Flask(__name__)
+
+@app.route("/graphql", methods=["POST"])
+def graphql_server():
+    data = request.get_json()
+    result = schema.execute(data.get("query"), variables=data.get("variables"))
+    return jsonify(result.data)
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
-    serve()
+    app.run(host="0.0.0.0", port=5001)
 
+================================================================================
+Chemin relatif: src/ms_profilrisque/Readme.md
+Pour tester:
+```sh
+python server.py
+```
+Ou en docker :
+```sh
+docker build -t ms_profilrisque .
+docker run -d -p 5001:5001 ms_profilrisque
+```
+
+Dans un autre terminal :
+```sh
+curl http://localhost:5001/health
+```
+
+```sh
+curl -X POST -H "Content-Type: application/json" \
+-d '{
+      "query": "query($loanAmount: Float!, $clientInfo: String!){ riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo) }",
+      "variables": {"loanAmount": 25000, "clientInfo": "Information client exemple"}
+    }' \
+http://localhost:5001/graphql
+
+```
+
+Réponse : hrg
+```sh
+{"riskProfile":"elev\u00e9"}
+```
 ================================================================================
