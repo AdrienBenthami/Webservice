@@ -40,7 +40,7 @@ services:
     ports:
       - "50051:50051"
     healthcheck:
-      # Ici, on vérifie que le port 50051 est ouvert (pour un service gRPC, on peut par exemple tester avec nc)
+      # Vérifie que le port 50051 est ouvert (service gRPC)
       test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
       interval: 10s
       timeout: 5s
@@ -56,8 +56,8 @@ services:
     depends_on:
       - ms_montantmax
     healthcheck:
-      # Vérifier que l'endpoint GraphQL répond (curl doit être présent dans l'image, sinon adaptez)
-      test: ["CMD-SHELL", "curl -f http://localhost:5001/graphql || exit 1"]
+      # Vérifie l'endpoint de health du service GraphQL
+      test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -88,8 +88,8 @@ services:
     depends_on:
       - ms_banque
     healthcheck:
-      # Vérifier que l'API REST répond (ici, l'endpoint /fund doit renvoyer une réponse HTTP 200)
-      test: ["CMD-SHELL", "curl -f http://localhost:5003/fund || exit 1"]
+      # Vérifie l'endpoint health du service (GET /health)
+      test: ["CMD-SHELL", "curl -f http://localhost:5003/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -206,7 +206,7 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # Installer curl et netcat-openbsd pour les healthchecks
-RUN apt-get update && apt-get install -y curl netcat-openbsd
+RUN apt-get update && apt-get install -y curl
 
 # Mettre à jour pip et installer Flask (et autres dépendances si besoin)
 RUN pip install --upgrade pip && \
@@ -223,23 +223,39 @@ CMD ["python", "server.py"]
 
 ================================================================================
 Chemin relatif: src/ms_fournisseur/server.py
-# src/ms_fournisseur/app.py
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False
 
-@app.route('/fund', methods=['POST'])
-def fund_request():
+# Endpoint pour créer un transfert de fonds (ressource : fundTransfers)
+@app.route('/fundTransfers', methods=['POST'])
+def create_fund_transfer():
     data = request.json
     loan_amount = data.get("loan_amount")
     client_id = data.get("client_id")
-    # Simuler le transfert des fonds
+    # Dans une application réelle, on générerait un identifiant unique et on enregistrerait la demande.
+    transfer_id = "1234"  # Exemple statique
+    response = {
+        "status": "success",
+        "message": f"Fonds de {loan_amount} transférés pour le client {client_id}",
+        "links": {
+            "self": f"/fundTransfers/{transfer_id}",
+            "status": f"/fundTransfers/{transfer_id}/status"
+        }
+    }
+    return jsonify(response), 201
+
+# Endpoint pour consulter l'état d'un transfert (simulation)
+@app.route('/fundTransfers/<transfer_id>/status', methods=['GET'])
+def get_fund_transfer_status(transfer_id):
+    # Ici, on simule toujours un statut "completed"
     return jsonify({
-        "status": "success", 
-        "message": f"Fonds de {loan_amount} transférés pour le client {client_id}"
+        "transfer_id": transfer_id,
+        "status": "completed"
     }), 200
-    
+
+# Endpoint dédié au healthcheck
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"}), 200
@@ -261,9 +277,13 @@ docker run -d -p 5003:5003 ms_fournisseur
 
 Dans un autre terminal :
 ```sh
+curl http://localhost:5003/health
+```
+
+```sh
 curl -X POST -H "Content-Type: application/json" \
-     -d '{"loan_amount": 15000, "client_id": "client123"}' \
-     http://localhost:5003/fund
+  -d '{"loan_amount": 15000, "client_id": "client123"}' \
+  http://localhost:5003/fundTransfers
 ```
 
 Réponse : 
@@ -291,7 +311,7 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Installer curl et netcat-openbsd pour les healthchecks
-RUN apt-get update && apt-get install -y curl netcat-openbsd
+RUN apt-get update && apt-get install -y netcat-openbsd
 
 # Copier le fichier des dépendances dans le conteneur
 COPY requirements.txt .
@@ -455,7 +475,7 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # Installer curl et netcat-openbsd pour les healthchecks
-RUN apt-get update && apt-get install -y curl netcat-openbsd
+RUN apt-get update && apt-get install -y netcat-openbsd
 
 # Ajouter le dossier contenant les modules générés au PYTHONPATH
 ENV PYTHONPATH="/app/ms_montantmax:${PYTHONPATH}"
@@ -733,7 +753,7 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # Installer curl et netcat-openbsd pour les healthchecks
-RUN apt-get update && apt-get install -y curl netcat-openbsd
+RUN apt-get update && apt-get install -y curl
 
 # Installer les dépendances nécessaires : Flask et Graphene
 RUN pip install --upgrade pip && \
@@ -795,6 +815,10 @@ docker run -d -p 5001:5001 ms_profilrisque
 ```
 
 Dans un autre terminal :
+```sh
+curl http://localhost:5001/health
+```
+
 ```sh
 curl -X POST -H "Content-Type: application/json" \
 -d '{
