@@ -57,14 +57,15 @@ Chemin relatif: conftest.py
 # conftest.py
 import sys, os
 
-# 1) ajouter src/ au PYTHONPATH pour que "from app.app import app" et
-#    "from ms_montantmax import montantmax_pb2_grpc" fonctionnent
-sys.path.insert(0, os.path.abspath(os.path.join(__file__, 'src')))
+# racine du projet
+ROOT = os.path.dirname(__file__)
 
-# 2) ajouter src/ms_montantmax au PYTHONPATH pour que l'import ABSOLU
-#    "import montantmax_pb2" (dans montantmax_pb2_grpc.py) trouve bien
-#    le fichier montantmax_pb2.py
-sys.path.insert(0, os.path.abspath(os.path.join(__file__, 'src', 'ms_montantmax')))
+# 1) ajouter src/ au PYTHONPATH pour importer app.app, ms_banque, ms_profilrisque, etc.
+sys.path.insert(0, os.path.abspath(os.path.join(ROOT, 'src')))
+
+# 2) ajouter src/ms_montantmax/ au PYTHONPATH pour que
+#    `import montantmax_pb2` dans montantmax_pb2_grpc.py fonctionne
+sys.path.insert(0, os.path.abspath(os.path.join(ROOT, 'src', 'ms_montantmax')))
 
 ================================================================================
 Chemin relatif: compose.yaml
@@ -382,11 +383,20 @@ Chemin relatif: .pytest_cache/v/cache/stepwise
 Chemin relatif: .pytest_cache/v/cache/lastfailed
 {
   "src/test/test_montantmax.py": true,
-  "tests/test_app.py": true
+  "tests/test/test_montantmax.py": true,
+  "tests/test_app.py::test_invalid_check": true
 }
 ================================================================================
 Chemin relatif: .pytest_cache/v/cache/nodeids
-[]
+[
+  "tests/test_app.py::test_grpc_refuse",
+  "tests/test_app.py::test_invalid_amount_type",
+  "tests/test_app.py::test_invalid_check",
+  "tests/test_app.py::test_missing_data",
+  "tests/test_app.py::test_pending_no_check",
+  "tests/test_app.py::test_risk_refusal",
+  "tests/test_app.py::test_success_flow"
+]
 ================================================================================
 Chemin relatif: src/__init__.py
 
@@ -619,7 +629,7 @@ def loan_request():
     """
     try:
         # Récupération et vérification des données de la requête
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({"status": "error", "reason": "Données de requête manquantes"}), 400
 
@@ -641,13 +651,13 @@ def loan_request():
 
         # 1. Vérification du montant avec MS MontantMax via gRPC
         try:
-            with grpc.insecure_channel(MS_MONTANTMAX_ADDRESS) as channel:
-                stub = montantmax_pb2_grpc.MontantMaxServiceStub(channel)
-                grpc_request = montantmax_pb2.LoanRequest(loan_amount=loan_amount)
-                grpc_response = stub.CheckLoan(grpc_request)
+            channel = grpc.insecure_channel(MS_MONTANTMAX_ADDRESS)
+            stub = montantmax_pb2_grpc.MontantMaxServiceStub(channel)
+            grpc_request = montantmax_pb2.LoanRequest(loan_amount=loan_amount)
+            grpc_response = stub.CheckLoan(grpc_request)
         except Exception as e:
-            # Vous pouvez ajouter ici un log de l'exception si besoin
             return jsonify({"status": "error", "reason": "Erreur lors de la vérification du montant"}), 500
+
 
         # Si le montant est refusé par le service, on arrête ici
         if not grpc_response.allowed:

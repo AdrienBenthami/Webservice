@@ -34,7 +34,7 @@ def loan_request():
     """
     try:
         # Récupération et vérification des données de la requête
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({"status": "error", "reason": "Données de requête manquantes"}), 400
 
@@ -56,13 +56,13 @@ def loan_request():
 
         # 1. Vérification du montant avec MS MontantMax via gRPC
         try:
-            with grpc.insecure_channel(MS_MONTANTMAX_ADDRESS) as channel:
-                stub = montantmax_pb2_grpc.MontantMaxServiceStub(channel)
-                grpc_request = montantmax_pb2.LoanRequest(loan_amount=loan_amount)
-                grpc_response = stub.CheckLoan(grpc_request)
+            channel = grpc.insecure_channel(MS_MONTANTMAX_ADDRESS)
+            stub = montantmax_pb2_grpc.MontantMaxServiceStub(channel)
+            grpc_request = montantmax_pb2.LoanRequest(loan_amount=loan_amount)
+            grpc_response = stub.CheckLoan(grpc_request)
         except Exception as e:
-            # Vous pouvez ajouter ici un log de l'exception si besoin
             return jsonify({"status": "error", "reason": "Erreur lors de la vérification du montant"}), 500
+
 
         # Si le montant est refusé par le service, on arrête ici
         if not grpc_response.allowed:

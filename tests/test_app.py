@@ -45,8 +45,6 @@ def mock_services(monkeypatch):
             risk = 'elevé' if amt >= 20000 else 'acceptable'
             return DummyResponse(status_code=200, json_data={'riskProfile': risk})
         if 'soap' in url:
-            body = kwargs.get('data', '')
-            # if <check>valid</check> present, valid; else invalid
             return DummyResponse(status_code=200, text='<ValidateCheckResult>Chèque validé</ValidateCheckResult>')
         if 'fundTransfers' in url:
             return DummyResponse(status_code=200, json_data={'status': 'success'})
@@ -98,12 +96,23 @@ def test_pending_no_check(client):
     assert data['status'] == 'pending'
     assert 'Veuillez soumettre un chèque' in data['message']
 
-# Test invalid check
+# Test invalid check (seulement SOAP surchargé)
 def test_invalid_check(client, mock_services, monkeypatch):
-    # override SOAP to return invalid
-    def fake_soap(url, **kwargs):
-        return DummyResponse(status_code=200, text='invalid')
-    monkeypatch.setattr(requests, 'post', fake_soap)
+    def fake_post_override(url, **kwargs):
+        if 'soap' in url:
+            # Simule un chèque invalide
+            return DummyResponse(status_code=200, text='invalid')
+        # Pour GraphQL
+        if 'graphql' in url:
+            amt = kwargs['json']['variables']['loanAmount']
+            risk = 'elevé' if amt >= 20000 else 'acceptable'
+            return DummyResponse(status_code=200, json_data={'riskProfile': risk})
+        # Pour REST fundTransfers
+        if 'fundTransfers' in url:
+            return DummyResponse(status_code=200, json_data={'status': 'success'})
+        return DummyResponse(status_code=404)
+    monkeypatch.setattr(requests, 'post', fake_post_override)
+
     payload = {'id': '1', 'personal_info': 'x', 'loan_amount': 10000, 'check': 'anything'}
     resp = client.post('/loan', json=payload)
     data = resp.get_json()
