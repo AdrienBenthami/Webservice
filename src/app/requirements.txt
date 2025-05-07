@@ -2,3 +2,5 @@ flask
 grpcio
 requests
 protobuf
+flasgger
+pyyaml
