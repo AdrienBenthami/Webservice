@@ -7,10 +7,12 @@ Webservice
 │           ├── lastfailed
 │           ├── nodeids
 │           └── stepwise
-├── Readme.md
+├── Quickstart.md
+├── README.md
 ├── compose.yaml
 ├── conftest.py
 ├── docs
+│   ├── architecture.png
 │   └── diagramme_activite.puml
 ├── pytest.ini
 ├── src
@@ -24,8 +26,10 @@ Webservice
 │   │   │           ├── lastfailed
 │   │   │           ├── nodeids
 │   │   │           └── stepwise
+│   │   ├── Dockerfile
 │   │   ├── __init__.py
-│   │   └── app.py
+│   │   ├── app.py
+│   │   └── requirements.txt
 │   ├── ms_banque
 │   │   ├── Dockerfile
 │   │   ├── Readme.md
@@ -73,9 +77,71 @@ sys.path.insert(0, os.path.abspath(os.path.join(ROOT, 'src')))
 sys.path.insert(0, os.path.abspath(os.path.join(ROOT, 'src', 'ms_montantmax')))
 
 ================================================================================
-Chemin relatif: compose.yaml
-version: '3.8'
+Chemin relatif: Quickstart.md
+# Guide Quickstart
 
+Ce guide rapide vous permet de démarrer et de tester l’application en moins de 5 minutes.
+
+### 1. Cloner le dépôt
+
+```bash
+git clone https://github.com/AdrienBenthami/Webservice.git
+cd Webservice
+```
+
+### 2. Démarrer tous les services en conteneurs
+
+```bash
+docker compose up --build -d
+```
+
+### 3. Vérifier que tout est sain
+
+```bash
+docker compose ps
+```
+
+Assurez-vous que chaque service affiche un état `healthy`.
+
+### 4. Tester un flux complet
+
+1. **Soumettre une demande** (pas de chèque pour l’instant) :
+
+   ```bash
+   curl -X POST http://localhost:5000/loan \
+     -H "Content-Type: application/json" \
+     -d '{"id":"client1","personal_info":"M. Dupont","loan_amount":8000}'
+   ```
+
+   * Vous obtiendrez un JSON avec `status":"pending"` et un `request_id`.
+
+2. **Consulter le statut** :
+
+   ```bash
+   curl http://localhost:5000/loan/status/<request_id>
+   ```
+
+   * Devrait retourner `pending`.
+
+3. **Simuler dépôt du chèque** (par défaut, `ms_banque` renvoie `valid`) :
+
+   ```bash
+   curl -X POST http://localhost:5000/loan/callback \
+     -H "Content-Type: text/xml" \
+     --data '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><ChequeStatusResponse><request_id>'<request_id>'</request_id><status>done</status><verdict>Chèque validé</verdict></ChequeStatusResponse></soapenv:Body></soapenv:Envelope>'
+   ```
+
+4. **Vérifier le statut final** :
+
+   ```bash
+   curl http://localhost:5000/loan/status/<request_id>
+   ```
+
+   * Vous devriez obtenir `status":"approved"`.
+
+Félicitations ! Votre application de prêt fonctionne.
+================================================================================
+Chemin relatif: compose.yaml
 services:
   redis:
     image: redis:6-alpine
@@ -144,8 +210,10 @@ services:
       - webservice
     restart: unless-stopped
 
-  compagnon:
-    build: ./src/app
+  app:
+    build: 
+      context: .
+      dockerfile: src/app/Dockerfile
     ports:
       - "5000:5000"
     depends_on:
@@ -171,133 +239,6 @@ networks:
     driver: bridge
 
 ================================================================================
-Chemin relatif: Readme.md
-# Application Compagnon - Démarrage et utilisation
-
-Ce README explique comment démarrer l'application compagnon (`app.py`) une fois que les microservices sont lancés via Docker Compose.
-
----
-
-## 1. Démarrage des microservices
-
-À la racine du projet, exécutez :
-
-```bash
-# Lance les micros-services (montantmax, profilrisque, banque, fournisseur)
-docker compose up --build -d
-```
-
-Cela va :
-
-- Construire et démarrer les conteneurs pour chaque microservice.  
-- Exposer les ports :
-  - 50051 (gRPC MontantMax)  
-  - 5001 (GraphQL ProfilRisque)  
-  - 5002 (SOAP Banque)  
-  - 5003 (REST Fournisseur)  
-
-Vérifiez que tous les services sont sains :  
-
-```bash
-docker compose ps
-```
-
----
-
-## 2. Démarrage de l'application compagnon
-
-L'application compagnon n'est pas encore incluse dans le `docker-compose.yml` par défaut. Pour la lancer localement :
-
-1. Placez-vous dans le répertoire `src/app` :  
-   ```bash
-   cd src/app
-   ```
-2. Activez votre environnement virtuel Python, puis installez les dépendances :  
-   ```bash
-   # si ce n'est pas déjà fait
-   python3 -m venv env
-   source env/bin/activate
-   pip install flask grpcio requests
-   ```
-3. Lancez l'application :  
-   ```bash
-   python app.py
-   ```
-
-L'application démarrera sur le port **5000** et s'attendra à trouver les microservices sur :
-
-- `localhost:50051` (MontantMax gRPC)  
-- `localhost:5001` (ProfilRisque GraphQL)  
-- `localhost:5002` (Banque SOAP)  
-- `localhost:5003` (Fournisseur REST)  
-
----
-
-## 3. Exemple d'utilisation
-
-### Requête de prêt sans chèque
-
-```bash
-curl -X POST http://localhost:5000/loan \
-  -H "Content-Type: application/json" \
-  -d '{
-        "id": "client123",
-        "personal_info": "M. Dupont, 45 ans, salarié",
-        "loan_amount": 8000,
-        "loan_type": "personnel",
-        "loan_desc": "Achat véhicule"
-      }'
-```
-
-**Réponse (status 200)** :
-
-```json
-{
-  "status": "pending",
-  "message": "Veuillez soumettre un chèque de banque"
-}
-```
-
-### Requête de prêt avec chèque valide
-
-```bash
-curl -X POST http://localhost:5000/loan \
-  -H "Content-Type: application/json" \
-  -d '{
-        "id": "client123",
-        "personal_info": "M. Dupont, 45 ans, salarié",
-        "loan_amount": 8000,
-        "loan_type": "personnel",
-        "loan_desc": "Achat véhicule",
-        "check": "valid"
-      }'
-```
-
-**Réponse (status 200)** :
-
-```json
-{
-  "status": "approved",
-  "message": "Prêt approuvé et fonds transférés"
-}
-```
-
----
-
-## 4. Arrêt des services
-
-Pour arrêter et supprimer les conteneurs :
-
-```bash
-docker compose down
-```
-
----
-
-**Bon tests et bonne utilisation !**
-
-
-================================================================================
 Chemin relatif: pytest.ini
 [pytest]
 minversion = 6.0
@@ -305,6 +246,169 @@ addopts = -ra -q
 testpaths = tests
 # Empêche pytest de descendre dans src/test
 norecursedirs = src/test
+================================================================================
+Chemin relatif: README.md
+## Fichier : README.md
+
+# Application Compagnon – README détaillé
+
+## Table des matières
+
+1. [Présentation](#présentation)
+2. [Architecture](#architecture)
+3. [Prérequis](#prérequis)
+4. [Installation](#installation)
+5. [Configuration](#configuration)
+6. [Démarrage des microservices](#démarrage-des-microservices)
+7. [Démarrage de l’application compagnon](#démarrage-de-lapplication-compagnon)
+8. [Endpoints](#endpoints)
+9. [Tests](#tests)
+10. [Contribuer](#contribuer)
+11. [Licence](#licence)
+
+---
+
+## Présentation
+
+L’**Application Compagnon** orchestre un workflow de demande de prêt en interagissant avec plusieurs micro-services :
+
+* **ms\_montantmax** (gRPC) : vérification du montant maximal autorisé.
+* **ms\_profilrisque** (GraphQL) : évaluation du profil de risque client.
+* **ms\_banque** (SOAP asynchrone) : validation du chèque de banque.
+* **ms\_fournisseur** (REST) : libération et transfert des fonds.
+
+Chaque service est containerisé et déployé via Docker Compose.
+
+## Architecture
+
+![Diagramme d’architecture](docs/architecture.png)
+
+1. Le client envoie une requête POST `/loan` à l’app Flask.
+2. L’app appelle le service gRPC **ms\_montantmax** pour vérifier le montant.
+3. Si validé, elle interroge **ms\_profilrisque** via GraphQL.
+4. Si le risque est acceptable, elle soumet un chèque à **ms\_banque** (SOAP async).
+5. Une fois le callback reçu, elle interroge **ms\_fournisseur** pour le transfert.
+
+Le dossier `docs/` contient des diagrammes UML détaillés.
+
+## Prérequis
+
+* **Docker** & **Docker Compose**
+* **Python 3.10+** (pour exécution locale hors conteneur)
+* **Redis** (utilisé par `ms_banque`, géré via Docker)
+
+## Installation
+
+1. Cloner ce dépôt :
+
+   ```bash
+   git clone https://github.com/AdrienBenthami/Webservice.git
+   cd Webservice
+   ```
+2. (Optionnel) Créer un environnement virtuel pour tests locaux :
+
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r src/app/requirements.txt
+   ```
+
+## Configuration
+
+* Le fichier `compose.yaml` expose tous les ports nécessaires :
+
+  * 50051 (gRPC MontantMax)
+  * 5001 (GraphQL ProfilRisque)
+  * 5002 (SOAP Banque)
+  * 5003 (REST Fournisseur)
+  * 5000 (Flask App)
+* Les URLs de chaque service sont configurées dans `src/app/app.py` via les variables :
+
+  ```python
+  MS_MONTANTMAX_ADDRESS = 'localhost:50051'
+  MS_PROFILRISQUE_URL  = 'http://localhost:5001/graphql'
+  MS_BANQUE_URL         = 'http://localhost:5002/'
+  MS_FOURNISSEUR_URL    = 'http://localhost:5003/fundTransfers'
+  ```
+
+## Démarrage des microservices
+
+Depuis la racine du projet :
+
+```bash
+docker compose up --build -d
+```
+
+Vérifiez l’état des services :
+
+```bash
+docker compose ps
+```
+
+## Démarrage de l’application compagnon
+
+Si vous utilisez Docker Compose, le service `app` démarre automatiquement.
+
+Pour un lancement local sans conteneurs :
+
+```bash
+cd src/app
+source venv/bin/activate  # si utilisé
+pip install -r requirements.txt
+python app.py
+```
+
+L’application écoute sur le port **5000**.
+
+## Endpoints
+
+### Application Flask (/app)
+
+| Méthode | Endpoint                    | Description                                   |
+| ------- | --------------------------- | --------------------------------------------- |
+| GET     | `/health`                   | Vérifie que l’app est opérationnelle.         |
+| POST    | `/loan`                     | Soumettre une demande de prêt.                |
+| GET     | `/loan/status/{request_id}` | Récupérer le statut de la demande.            |
+| POST    | `/loan/callback`            | Point de callback SOAP interne (automatique). |
+
+### ms\_fournisseur (REST)
+
+| Méthode | Endpoint                     | Description                   |
+| ------- | ---------------------------- | ----------------------------- |
+| GET     | `/health`                    | Healthcheck.                  |
+| POST    | `/fundTransfers`             | Créer un transfert de fonds.  |
+| GET     | `/fundTransfers/{id}/status` | Statut du transfert de fonds. |
+
+### ms\_profilrisque (GraphQL)
+
+* Endpoint unique : `/graphql`
+* Requête :
+
+  ```graphql
+  query($loanAmount: Float!, $clientInfo: String!) {
+    riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo)
+  }
+  ```
+
+### ms\_montantmax (gRPC)
+
+* Service : `ms_montantmax.MontantMaxService`
+* Méthode : `CheckLoan(LoanRequest) returns LoanResponse`
+* Exemple de commande `grpcurl` dans `src/ms_montantmax/Readme.md`.
+
+## Tests
+
+Exécuter l’ensemble des tests unitaires et d’intégration :
+
+```bash
+pytest -q
+```
+
+Le fichier `pytest.ini` est préconfiguré pour le dossier `tests/`.
+
+
+
+
 ================================================================================
 Chemin relatif: docs/diagramme_activite.puml
 @startuml
@@ -374,6 +478,9 @@ endif
 stop
 @enduml
 
+================================================================================
+Chemin relatif: docs/architecture.png
+Erreur de lecture: 'utf-8' codec can't decode byte 0x89 in position 0: invalid start byte
 ================================================================================
 Chemin relatif: tests/test_ms_montantmax.py
 import pytest
@@ -1176,7 +1283,43 @@ vous verrez `verdict=Chèque invalide`.
 Vous disposez désormais d’un guide complet pour déployer et tester manuellement toutes les opérations de **ms\_banque**.
 
 ================================================================================
+Chemin relatif: src/app/requirements.txt
+flask
+grpcio
+requests
+protobuf
+
+================================================================================
 Chemin relatif: src/app/__init__.py
+
+================================================================================
+Chemin relatif: src/app/Dockerfile
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# pour healthchecks (netcat) et curl
+RUN apt-get update && apt-get install -y netcat-openbsd curl
+
+# 1) installer les dépendances Python
+COPY src/app/requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# 2) copier l'app Flask
+COPY src/app /app
+
+# 3) copier le dossier ms_montantmax
+COPY src/ms_montantmax /app/ms_montantmax
+
+# 4) ajouter ms_montantmax à PYTHONPATH pour les imports top-level
+ENV PYTHONPATH="/app/ms_montantmax:${PYTHONPATH}"
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:5000/health || exit 1
+
+CMD ["python", "app.py"]
 
 ================================================================================
 Chemin relatif: src/app/app.py
@@ -1202,6 +1345,10 @@ MS_FOURNISSEUR_URL    = 'http://localhost:5003/fundTransfers'
 
 # Stockage en mémoire des demandes (pour tests/demo)
 _loans = {}
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
 
 @app.route('/loan', methods=['POST'])
 def loan_request():
@@ -1323,7 +1470,7 @@ def loan_callback():
     return '', 200
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    app.run(host='0.0.0.0', port=5000)
 
 ================================================================================
 Chemin relatif: src/app/.pytest_cache/CACHEDIR.TAG

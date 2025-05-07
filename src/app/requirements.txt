@@ -1,0 +1,4 @@
+flask
+grpcio
+requests
+protobuf

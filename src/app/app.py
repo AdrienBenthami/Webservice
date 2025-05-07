@@ -21,6 +21,10 @@ MS_FOURNISSEUR_URL    = 'http://localhost:5003/fundTransfers'
 # Stockage en mémoire des demandes (pour tests/demo)
 _loans = {}
 
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
+
 @app.route('/loan', methods=['POST'])
 def loan_request():
     data = request.get_json(silent=True)
@@ -141,4 +145,4 @@ def loan_callback():
     return '', 200
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    app.run(host='0.0.0.0', port=5000)
