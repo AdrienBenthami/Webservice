@@ -7,6 +7,7 @@ Webservice
 │           ├── lastfailed
 │           ├── nodeids
 │           └── stepwise
+├── MiniRapport.md
 ├── Quickstart.md
 ├── README.md
 ├── compose.yaml
@@ -84,6 +85,13 @@ Chemin relatif: Quickstart.md
 
 Ce guide rapide vous permet de démarrer et de tester l’application en moins de 5 minutes.
 
+### Prérequis
+
+- **Git**
+- **Docker** & **Docker Compose**  
+- **Curl**
+- **jq** (fortement recommandé pour formater le JSON)  
+
 ### 1. Cloner le dépôt
 
 ```bash
@@ -105,19 +113,9 @@ docker compose ps
 
 Assurez-vous que chaque service affiche un état `healthy`.
 
-### 4. (Optionnel) Installer **jq** pour formater le JSON
-
-```bash
-# Debian/Ubuntu
-sudo apt-get update && sudo apt-get install -y jq
-
-# macOS (Homebrew)
-brew install jq
-```
-
 > **Astuce** : si vous n’avez pas `jq`, remplacez `| jq` par `| python3 -m json.tool`.
 
-### 5. Tester un flux complet et récupérer l’historique
+### 4. Tester un flux complet et récupérer l’historique
 
 1. **Soumettre une demande** (pas de chèque pour l’instant) :
 
@@ -189,14 +187,6 @@ Félicitations ! Votre application de prêt fonctionne et vous disposez d’une
 ================================================================================
 Chemin relatif: compose.yaml
 services:
-  redis:
-    image: redis:6-alpine
-    container_name: msb_redis
-    ports:
-      - "6379:6379"
-    networks:
-      - webservice
-
   ms_montantmax:
     build: ./src/ms_montantmax
     ports:
@@ -230,7 +220,6 @@ services:
     ports:
       - "5002:5002"
     depends_on:
-      - redis
       - ms_profilrisque
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 5002 || exit 1"]
@@ -288,6 +277,111 @@ services:
 networks:
   webservice:
     driver: bridge
+
+================================================================================
+Chemin relatif: MiniRapport.md
+# Mini-Rapport : Application de gestion de prêt
+
+## 1. Lien vers le dépôt
+
+* [https://github.com/AdrienBenthami/Webservice.git](https://github.com/AdrienBenthami/Webservice.git)
+
+## 2. Fiche d'auto-évaluation
+
+| Critère                                                             | Points attribués | Points max |
+| ------------------------------------------------------------------- | ---------------: | ---------: |
+| Conception du workflow avec pools et interactions entre partenaires |                5 |         15 |
+| Utilisation de gateways (OR, AND ou XOR)                            |               15 |         15 |
+| Requête REST                                                        |               30 |         30 |
+| Requête SOAP                                                        |               30 |         30 |
+| Requête gRPC                                                        |               20 |         20 |
+| Requête GraphQL                                                     |               20 |         20 |
+| Tests et documentation des API                                      |               30 |         30 |
+| Procédures correctes et exécution complète                          |               40 |         40 |
+| Déploiement et gestion des microservices (optionnel)                |               50 |         50 |
+| **Total**                                                           |              240 |        250 |
+
+> **Note** : +50 points optionnels obtenus grâce à l’orchestration via Docker Compose et healthchecks.
+
+## 3. How to install
+
+### Prérequis
+
+* **Docker** & **Docker Compose**
+* **Python 3.10+** (hors conteneur, facultatif)
+* **Redis** (géré via Docker, facultatif)
+* **jq** (optionnel pour formater le JSON)
+
+### Étapes d’installation
+
+```bash
+# 1. Cloner le dépôt
+git clone https://github.com/AdrienBenthami/Webservice.git
+cd Webservice
+
+# 2. Démarrer tous les services en conteneurs
+docker compose up --build -d
+
+# 3. Vérifier que tout est sain
+docker compose ps  # chaque service doit être en état 'healthy'
+```
+
+## 4. How to use
+
+1. **Créer une demande de prêt**
+
+   ```bash
+   curl -s -X POST http://localhost:5000/loan \
+     -H "Content-Type: application/json" \
+     -d '{"id":"client1","personal_info":"M. Dupont","loan_amount":8000}' | jq
+   ```
+
+   ![Création de la demande](images/screenshot_loan_request.png)
+
+2. **Vérifier le statut**
+
+   ```bash
+   curl -s http://localhost:5000/loan/status/<request_id> | jq
+   ```
+
+   ![Statut de la demande](images/screenshot_status.png)
+
+3. **Consulter l’historique des appels**
+
+   ```bash
+   curl -s http://localhost:5000/loan/history/<request_id> | jq
+   ```
+
+   ![Historique des appels](images/screenshot_history.png)
+
+4. **Soumettre la validation du chèque**
+
+   ```bash
+   curl -s -X POST http://localhost:5000/loan/callback \
+     -H "Content-Type: text/xml" \
+     --data '<?xml version="1.0"?>\
+   <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">\
+     <soapenv:Body>\
+       <ChequeStatusResponse>\
+         <request_id><request_id></request_id>\
+         <status>done</status>\
+         <verdict>Chèque validé</verdict>\
+       </ChequeStatusResponse>\
+     </soapenv:Body>\
+   </soapenv:Envelope>'
+   ```
+
+   ![Callback SOAP](images/screenshot_callback.png)
+
+5. **Vérifier le statut final**
+
+   ```bash
+   curl -s http://localhost:5000/loan/status/<request_id> | jq
+   ```
+
+   ![Statut final](images/screenshot_final.png)
+
+*Remarque : Remplacez `<request_id>` par l’identifiant retourné lors de la création de la demande.*
 
 ================================================================================
 Chemin relatif: pytest.ini
@@ -356,8 +450,7 @@ Chaque service est containerisé et déployé via Docker Compose. Grâce à la f
 ## Prérequis
 
 - **Docker** & **Docker Compose**  
-- **Python 3.10+** (pour exécution locale hors conteneur)  
-- **Redis** (géré via Docker)  
+- **Python 3.10+** (pour exécution locale hors conteneur)    
 - **jq** (fortement recommandé pour formater le JSON)  
   ```bash
   # Debian/Ubuntu
@@ -691,7 +784,7 @@ Ce document décrit en détail chaque cas de test, avec son objectif, sa configu
 
   * `service` pour `ms_montantmax`.
   * `client` pour les applications Flask.
-  * `flush_redis` pour vider Redis avant/après `ms_banque`.
+  * `flush_cache` pour vider le dictionnaire avant/après `ms_banque`.
   * `mock_services` pour stubber gRPC et `requests.post` dans `test_app.py`.
 
 ---
@@ -1253,17 +1346,17 @@ if sys.version_info >= (3, 11):
     
     
 from spyne.server.wsgi import WsgiApplication
-from ms_banque.server import application, r
+from ms_banque.server import application, _STORE
 from werkzeug.test import Client
 from werkzeug.wrappers import Response
 from lxml import etree
 
 
 @pytest.fixture(autouse=True)
-def flush_redis():
-    r.flushdb()
+def flush_store():
+    _STORE.clear()
     yield
-    r.flushdb()
+    _STORE.clear()
 
 @pytest.fixture
 def client():
@@ -1466,7 +1559,6 @@ Réponse :
 Chemin relatif: src/ms_banque/requirements.txt
 spyne
 lxml
-redis
 requests
 ================================================================================
 Chemin relatif: src/ms_banque/__init__.py
@@ -1504,9 +1596,10 @@ from spyne import Application, rpc, ServiceBase, Unicode, ComplexModel
 from spyne.protocol.soap import Soap11
 from spyne.server.wsgi import WsgiApplication
 from lxml import etree
-import redis, uuid, threading, requests
+import uuid, threading, requests
 
-r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
+# --- store in-memory instead of Redis ---
+_STORE = {}
 
 class ChequeStatus(ComplexModel):
     status  = Unicode
@@ -1551,21 +1644,23 @@ class BanqueAsync(ServiceBase):
         relates_to = tree.findtext('.//wsa:MessageID',      namespaces=ns_wsa) or ''
 
         req_id = str(uuid.uuid4())
-        r.hset(req_id, mapping={
+        _STORE[req_id] = {
             'status':     'pending',
             'verdict':    '',
             'reply_to':   reply_to,
             'relates_to': relates_to
-        })
+        }
         return req_id
 
     @rpc(Unicode, Unicode, _returns=None)
     def UploadCheque(ctx, request_id, cheque):
-        data = r.hgetall(request_id)
+        data = _STORE.get(request_id)
         if not data:
             return None
         verdict = "Chèque validé" if cheque == 'valid' else "Chèque invalide"
-        r.hset(request_id, mapping={'status':'done','verdict':verdict})
+        data['status']  = 'done'
+        data['verdict'] = verdict
+        # lancer le callback en arrière-plan
         threading.Thread(
             target=send_callback,
             args=(request_id, data['reply_to'], data['relates_to'], verdict),
@@ -1575,10 +1670,10 @@ class BanqueAsync(ServiceBase):
 
     @rpc(Unicode, _returns=ChequeStatus)
     def GetChequeStatus(ctx, request_id):
-        if not r.exists(request_id):
+        data = _STORE.get(request_id)
+        if not data:
             return ChequeStatus(status='unknown', verdict='')
-        d = r.hgetall(request_id)
-        return ChequeStatus(status=d['status'], verdict=d.get('verdict',''))
+        return ChequeStatus(status=data['status'], verdict=data['verdict'])
 
 application = Application(
     [BanqueAsync],
