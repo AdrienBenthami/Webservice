@@ -3,6 +3,7 @@
 Application compagnon pour la gestion des demandes de prêt.
 Orchestre les appels aux microservices et supporte le workflow asynchrone pour le chèque.
 """
+import os
 from flask import Flask, request, jsonify
 import requests
 import grpc
@@ -13,10 +14,10 @@ from ms_montantmax import montantmax_pb2, montantmax_pb2_grpc
 app = Flask(__name__)
 
 # Config des microservices
-MS_MONTANTMAX_ADDRESS = 'localhost:50051'
-MS_PROFILRISQUE_URL  = 'http://localhost:5001/graphql'
-MS_BANQUE_URL         = 'http://localhost:5002/'   # SOAP async
-MS_FOURNISSEUR_URL    = 'http://localhost:5003/fundTransfers'
+MS_MONTANTMAX_ADDRESS = os.getenv('MS_MONTANTMAX_ADDRESS', 'ms_montantmax:50051')
+MS_PROFILRISQUE_URL  = os.getenv('MS_PROFILRISQUE_URL',  'http://ms_profilrisque:5001/graphql')
+MS_BANQUE_URL         = os.getenv('MS_BANQUE_URL',         'http://ms_banque:5002/')
+MS_FOURNISSEUR_URL    = os.getenv('MS_FOURNISSEUR_URL',    'http://ms_fournisseur:5003/fundTransfers')
 
 # Stockage en mémoire des demandes (pour tests/demo)
 _loans = {}

@@ -67,6 +67,11 @@ services:
     restart: unless-stopped
 
   app:
+    environment:
+      - MS_MONTANTMAX_ADDRESS=ms_montantmax:50051
+      - MS_PROFILRISQUE_URL=http://ms_profilrisque:5001/graphql
+      - MS_BANQUE_URL=http://ms_banque:5002/
+      - MS_FOURNISSEUR_URL=http://ms_fournisseur:5003/fundTransfers
     build: 
       context: .
       dockerfile: src/app/Dockerfile
