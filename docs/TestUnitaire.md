@@ -29,7 +29,7 @@ Ce document décrit en détail chaque cas de test, avec son objectif, sa configu
 
   * `service` pour `ms_montantmax`.
   * `client` pour les applications Flask.
-  * `flush_redis` pour vider Redis avant/après `ms_banque`.
+  * `flush_cache` pour vider le dictionnaire avant/après `ms_banque`.
   * `mock_services` pour stubber gRPC et `requests.post` dans `test_app.py`.
 
 ---

@@ -2,6 +2,13 @@
 
 Ce guide rapide vous permet de démarrer et de tester l’application en moins de 5 minutes.
 
+### Prérequis
+
+- **Git**
+- **Docker** & **Docker Compose**  
+- **Curl**
+- **jq** (fortement recommandé pour formater le JSON)  
+
 ### 1. Cloner le dépôt
 
 ```bash
@@ -23,19 +30,9 @@ docker compose ps
 
 Assurez-vous que chaque service affiche un état `healthy`.
 
-### 4. (Optionnel) Installer **jq** pour formater le JSON
-
-```bash
-# Debian/Ubuntu
-sudo apt-get update && sudo apt-get install -y jq
-
-# macOS (Homebrew)
-brew install jq
-```
-
 > **Astuce** : si vous n’avez pas `jq`, remplacez `| jq` par `| python3 -m json.tool`.
 
-### 5. Tester un flux complet et récupérer l’historique
+### 4. Tester un flux complet et récupérer l’historique
 
 1. **Soumettre une demande** (pas de chèque pour l’instant) :
 

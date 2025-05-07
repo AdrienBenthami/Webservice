@@ -6,17 +6,17 @@ if sys.version_info >= (3, 11):
     
     
 from spyne.server.wsgi import WsgiApplication
-from ms_banque.server import application, r
+from ms_banque.server import application, _STORE
 from werkzeug.test import Client
 from werkzeug.wrappers import Response
 from lxml import etree
 
 
 @pytest.fixture(autouse=True)
-def flush_redis():
-    r.flushdb()
+def flush_store():
+    _STORE.clear()
     yield
-    r.flushdb()
+    _STORE.clear()
 
 @pytest.fixture
 def client():

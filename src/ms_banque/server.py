@@ -2,9 +2,10 @@ from spyne import Application, rpc, ServiceBase, Unicode, ComplexModel
 from spyne.protocol.soap import Soap11
 from spyne.server.wsgi import WsgiApplication
 from lxml import etree
-import redis, uuid, threading, requests
+import uuid, threading, requests
 
-r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
+# --- store in-memory instead of Redis ---
+_STORE = {}
 
 class ChequeStatus(ComplexModel):
     status  = Unicode
@@ -49,21 +50,23 @@ class BanqueAsync(ServiceBase):
         relates_to = tree.findtext('.//wsa:MessageID',      namespaces=ns_wsa) or ''
 
         req_id = str(uuid.uuid4())
-        r.hset(req_id, mapping={
+        _STORE[req_id] = {
             'status':     'pending',
             'verdict':    '',
             'reply_to':   reply_to,
             'relates_to': relates_to
-        })
+        }
         return req_id
 
     @rpc(Unicode, Unicode, _returns=None)
     def UploadCheque(ctx, request_id, cheque):
-        data = r.hgetall(request_id)
+        data = _STORE.get(request_id)
         if not data:
             return None
         verdict = "Chèque validé" if cheque == 'valid' else "Chèque invalide"
-        r.hset(request_id, mapping={'status':'done','verdict':verdict})
+        data['status']  = 'done'
+        data['verdict'] = verdict
+        # lancer le callback en arrière-plan
         threading.Thread(
             target=send_callback,
             args=(request_id, data['reply_to'], data['relates_to'], verdict),
@@ -73,10 +76,10 @@ class BanqueAsync(ServiceBase):
 
     @rpc(Unicode, _returns=ChequeStatus)
     def GetChequeStatus(ctx, request_id):
-        if not r.exists(request_id):
+        data = _STORE.get(request_id)
+        if not data:
             return ChequeStatus(status='unknown', verdict='')
-        d = r.hgetall(request_id)
-        return ChequeStatus(status=d['status'], verdict=d.get('verdict',''))
+        return ChequeStatus(status=data['status'], verdict=data['verdict'])
 
 application = Application(
     [BanqueAsync],

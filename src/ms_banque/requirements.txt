@@ -1,4 +1,3 @@
 spyne
 lxml
-redis
 requests

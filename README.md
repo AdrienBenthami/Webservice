@@ -55,8 +55,7 @@ Chaque service est containerisé et déployé via Docker Compose. Grâce à la f
 ## Prérequis
 
 - **Docker** & **Docker Compose**  
-- **Python 3.10+** (pour exécution locale hors conteneur)  
-- **Redis** (géré via Docker)  
+- **Python 3.10+** (pour exécution locale hors conteneur)    
 - **jq** (fortement recommandé pour formater le JSON)  
   ```bash
   # Debian/Ubuntu
