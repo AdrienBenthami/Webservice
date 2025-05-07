@@ -1,143 +1,144 @@
 #!/usr/bin/env python3
 """
 Application compagnon pour la gestion des demandes de prêt.
-Elle orchestre les appels aux différents microservices :
-  - MS MontantMax (gRPC) pour la vérification du montant.
-  - MS ProfilRisque (GraphQL) pour l'analyse du profil de risque.
-  - MS Banque (SOAP) pour la validation du chèque.
-  - MS Fournisseur (REST) pour la demande de financement.
+Orchestre les appels aux microservices et supporte le workflow asynchrone pour le chèque.
 """
-
 from flask import Flask, request, jsonify
 import requests
 import grpc
-from ms_montantmax import montantmax_pb2
-from ms_montantmax import montantmax_pb2_grpc
+import uuid
+from xml.etree import ElementTree as ET
+from ms_montantmax import montantmax_pb2, montantmax_pb2_grpc
 
 app = Flask(__name__)
 
-# Adresses et ports des microservices (à ajuster si besoin)
+# Config des microservices
 MS_MONTANTMAX_ADDRESS = 'localhost:50051'
-MS_PROFILRISQUE_URL = 'http://localhost:5001/graphql'
-MS_BANQUE_URL = 'http://localhost:5002/soap'
-MS_FOURNISSEUR_URL = 'http://localhost:5003/fundTransfers'
+MS_PROFILRISQUE_URL  = 'http://localhost:5001/graphql'
+MS_BANQUE_URL         = 'http://localhost:5002/'   # SOAP async
+MS_FOURNISSEUR_URL    = 'http://localhost:5003/fundTransfers'
+
+# Stockage en mémoire des demandes (pour tests/demo)
+_loans = {}
 
 @app.route('/loan', methods=['POST'])
 def loan_request():
-    """
-    Traite la demande de prêt en exécutant successivement :
-      1. Vérification du montant via MS MontantMax (gRPC).
-      2. Analyse du profil de risque via MS ProfilRisque (GraphQL).
-      3. Validation de l'existence d'un chèque.
-      4. Validation du chèque via MS Banque (SOAP).
-      5. Demande de fonds via MS Fournisseur (REST).
-    """
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"status": "error", "reason": "Données de requête manquantes"}), 400
+
+    client_id     = data.get("id")
+    personal_info = data.get("personal_info")
+    loan_amount   = data.get("loan_amount")
+    if client_id is None or personal_info is None or loan_amount is None:
+        return jsonify({"status": "error", "reason": "Paramètres requis manquants"}), 400
+
+    # Montant en float
     try:
-        # Récupération et vérification des données de la requête
-        data = request.get_json(silent=True)
-        if not data:
-            return jsonify({"status": "error", "reason": "Données de requête manquantes"}), 400
+        loan_amount = float(loan_amount)
+    except (ValueError, TypeError):
+        return jsonify({"status": "error", "reason": "Le montant doit être un nombre"}), 400
 
-        client_id     = data.get("id")
-        personal_info = data.get("personal_info")
-        loan_type     = data.get("loan_type")
-        loan_amount   = data.get("loan_amount")
-        loan_desc     = data.get("loan_desc")
+    # 1. Vérification gRPC MontantMax
+    try:
+        channel = grpc.insecure_channel(MS_MONTANTMAX_ADDRESS)
+        stub    = montantmax_pb2_grpc.MontantMaxServiceStub(channel)
+        resp    = stub.CheckLoan(montantmax_pb2.LoanRequest(loan_amount=loan_amount))
+    except Exception:
+        return jsonify({"status": "error", "reason": "Erreur vérification montant"}), 500
 
-        # Vérifier que les paramètres essentiels sont présents
-        if client_id is None or personal_info is None or loan_amount is None:
-            return jsonify({"status": "error", "reason": "Paramètres requis manquants"}), 400
+    if not resp.allowed:
+        return jsonify({"status": "refused", "reason": resp.message}), 400
 
-        # Assurer que le montant est un nombre
-        try:
-            loan_amount = float(loan_amount)
-        except (ValueError, TypeError):
-            return jsonify({"status": "error", "reason": "Le montant doit être un nombre"}), 400
+    # 2. Vérification profil de risque (GraphQL)
+    query = '''
+      query($loanAmount: Float!, $clientInfo: String!) {
+        riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo)
+      }
+    '''
+    try:
+        gql = requests.post(
+          MS_PROFILRISQUE_URL,
+          json={'query': query, 'variables': {'loanAmount': loan_amount, 'clientInfo': personal_info}},
+          timeout=5
+        )
+        risk = gql.json().get('riskProfile')
+    except Exception:
+        return jsonify({"status": "error", "reason": "Erreur profil risque"}), 500
 
-        # 1. Vérification du montant avec MS MontantMax via gRPC
-        try:
-            channel = grpc.insecure_channel(MS_MONTANTMAX_ADDRESS)
-            stub = montantmax_pb2_grpc.MontantMaxServiceStub(channel)
-            grpc_request = montantmax_pb2.LoanRequest(loan_amount=loan_amount)
-            grpc_response = stub.CheckLoan(grpc_request)
-        except Exception as e:
-            return jsonify({"status": "error", "reason": "Erreur lors de la vérification du montant"}), 500
+    if risk == 'elevé' and loan_amount >= 20000:
+        return jsonify({"status": "refused", "reason": "Risque trop élevé"}), 400
 
+    # 3. SubmitChequeRequest (asynchrone) → on récupère request_id
+    soap = f'''<?xml version="1.0"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <SubmitChequeRequest xmlns="ms.banque.async"/>
+  </soapenv:Body>
+</soapenv:Envelope>'''
+    try:
+        headers = {'Content-Type': 'application/soap+xml; charset=utf-8'}
+        r = requests.post(MS_BANQUE_URL, data=soap, headers=headers, timeout=5)
+        tree = ET.fromstring(r.content)
+        ns   = {'soap11env': 'http://schemas.xmlsoap.org/soap/envelope/',
+                'tns':       'ms.banque.async'}
+        req_id = tree.findtext('.//tns:SubmitChequeRequestResult', namespaces=ns)
+    except Exception:
+        return jsonify({"status": "error", "reason": "Erreur dépôt chèque"}), 500
 
-        # Si le montant est refusé par le service, on arrête ici
-        if not grpc_response.allowed:
-            return jsonify({"status": "refused", "reason": "Montant trop élevé"}), 400
+    # On stocke l'état initial
+    _loans[req_id] = {
+        'client_id':   client_id,
+        'loan_amount': loan_amount,
+        'status':      'pending'
+    }
 
-        # 2. Vérification du profil de risque via MS ProfilRisque (GraphQL)
-        query = '''
-        query($loanAmount: Float!, $clientInfo: String!) {
-          riskProfile(loanAmount: $loanAmount, clientInfo: $clientInfo)
-        }
-        '''
-        variables = {"loanAmount": loan_amount, "clientInfo": personal_info}
-        try:
-            response = requests.post(MS_PROFILRISQUE_URL, json={'query': query, 'variables': variables}, timeout=5)
-            risk_data = response.json()
-        except Exception as e:
-            return jsonify({"status": "error", "reason": "Erreur lors de la vérification du profil de risque"}), 500
+    return jsonify({
+        "status":     "pending",
+        "request_id": req_id,
+        "message":    "Veuillez déposer votre chèque en utilisant cet ID"
+    }), 200
 
-        # Gestion d'éventuelles erreurs GraphQL
-        if 'errors' in risk_data:
-            return jsonify({"status": "error", "reason": "Erreur GraphQL : " + str(risk_data['errors'])}), 500
+@app.route('/loan/status/<request_id>', methods=['GET'])
+def loan_status(request_id):
+    entry = _loans.get(request_id)
+    if not entry:
+        return jsonify({"status": "error", "reason": "ID inconnu"}), 404
 
-        # Extraction du profil de risque ; le service renvoie directement { "riskProfile": <valeur> }
-        if 'riskProfile' not in risk_data:
-            return jsonify({"status": "error", "reason": "Réponse GraphQL inattendue"}), 500
+    if entry['status'] == 'pending':
+        return jsonify({"status": "pending"}), 200
 
-        risk = risk_data['riskProfile']
-        # Refus si le profil est "elevé" et que le montant est supérieur ou égal à 20000
-        if risk == "elevé" and loan_amount >= 20000:
-            return jsonify({"status": "refused", "reason": "Risque trop élevé"}), 400
-
-        # 3. Vérification de la présence du chèque
-        check = data.get("check")
-        if not check:
-            return jsonify({"status": "pending", "message": "Veuillez soumettre un chèque de banque"}), 200
-
-        # 4. Validation du chèque via MS Banque (SOAP)
-        soap_payload = f"""<?xml version="1.0"?>
-<Envelope>
-  <Body>
-    <ValidateCheck>
-      <check>{check}</check>
-    </ValidateCheck>
-  </Body>
-</Envelope>"""
-        try:
-            headers = {'Content-Type': 'text/xml'}
-            soap_response = requests.post(MS_BANQUE_URL, data=soap_payload, headers=headers, timeout=5)
-        except Exception as e:
-            return jsonify({"status": "error", "reason": "Erreur lors de la validation du chèque"}), 500
-
-        # Si la réponse contient "invalid" (insensible à la casse), le chèque est refusé
-        if "invalid" in soap_response.text.lower():
-            return jsonify({"status": "refused", "reason": "Chèque invalide"}), 400
-
-        # 5. Demande de financement via MS Fournisseur (REST)
-        try:
-            fund_response = requests.post(
-                MS_FOURNISSEUR_URL,
-                json={"loan_amount": loan_amount, "client_id": client_id},
-                timeout=5
-            )
-        except Exception as e:
-            return jsonify({"status": "error", "reason": "Erreur lors de la demande de financement"}), 500
-
-        if fund_response.status_code != 200:
-            return jsonify({"status": "refused", "reason": "Problème de financement"}), 400
-
-        # Retour final en cas de succès
+    # état 'done'
+    verdict = entry.get('verdict', '')
+    if verdict == 'Chèque validé':
         return jsonify({"status": "approved", "message": "Prêt approuvé et fonds transférés"}), 200
+    else:
+        return jsonify({"status": "refused", "reason": "Chèque invalide"}), 400
 
-    except Exception as e:
-        # Gestion globale des erreurs non prévues
-        return jsonify({"status": "error", "reason": "Erreur interne du serveur : " + str(e)}), 500
+@app.route('/loan/callback', methods=['POST'])
+def loan_callback():
+    # Point de callback SOAP asynchrone
+    content = request.data
+    tree    = ET.fromstring(content)
+    # On extrait simplement les balises <request_id> et <verdict>
+    req_id  = tree.findtext('.//request_id')
+    verdict = tree.findtext('.//verdict')
+
+    entry = _loans.get(req_id)
+    if not entry:
+        return '', 404
+
+    entry['status']  = 'done'
+    entry['verdict'] = verdict or ''
+
+    # Si validé, on appelle MS_FOURNISSEUR pour débloquer les fonds
+    if verdict == 'Chèque validé':
+        requests.post(
+          MS_FOURNISSEUR_URL,
+          json={'loan_amount': entry['loan_amount'], 'client_id': entry['client_id']},
+          timeout=5
+        )
+    return '', 200
 
 if __name__ == '__main__':
-    # Lancer l'application sur le port 5000
     app.run(port=5000)

@@ -1,87 +1,94 @@
+version: '3.8'
+
 services:
+  redis:
+    image: redis:6-alpine
+    container_name: msb_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - webservice
+
   ms_montantmax:
     build: ./src/ms_montantmax
     ports:
       - "50051:50051"
     healthcheck:
-      # Vérifie que le port 50051 est ouvert (service gRPC)
       test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - webservice
     restart: unless-stopped
 
   ms_profilrisque:
     build: ./src/ms_profilrisque
     ports:
       - "5001:5001"
-    networks:
-      - webservice
     depends_on:
       - ms_montantmax
     healthcheck:
-      # Vérifie l'endpoint de health du service GraphQL
       test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - webservice
     restart: unless-stopped
 
   ms_banque:
     build: ./src/ms_banque
     ports:
       - "5002:5002"
-    networks:
-      - webservice
     depends_on:
+      - redis
       - ms_profilrisque
     healthcheck:
-      # Pour le service SOAP, on vérifie que le port est ouvert
       test: ["CMD-SHELL", "nc -z localhost 5002 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - webservice
     restart: unless-stopped
 
   ms_fournisseur:
     build: ./src/ms_fournisseur
     ports:
       - "5003:5003"
-    networks:
-      - webservice
     depends_on:
       - ms_banque
     healthcheck:
-      # Vérifie l'endpoint health du service (GET /health)
       test: ["CMD-SHELL", "curl -f http://localhost:5003/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - webservice
     restart: unless-stopped
 
-#  compagnon:
-#    build: ./src/app
-#    ports:
-#      - "5000:5000"
-#    networks:
-#      - webservice
-#    depends_on:
-#      ms_montantmax:
-#        condition: service_healthy
-#      ms_profilrisque:
-#        condition: service_healthy
-#      ms_banque:
-#        condition: service_healthy
-#      ms_fournisseur:
-#        condition: service_healthy
-#    healthcheck:
-#      # Vérifier que l'application compagnon (accessible sur le port 5000) répond
-#      test: ["CMD-SHELL", "curl -f http://localhost:5000 || exit 1"]
-#      interval: 10s
-#      timeout: 5s
-#      retries: 5
-#    restart: unless-stopped
-
+  compagnon:
+    build: ./src/app
+    ports:
+      - "5000:5000"
+    depends_on:
+      ms_montantmax:
+        condition: service_healthy
+      ms_profilrisque:
+        condition: service_healthy
+      ms_banque:
+        condition: service_healthy
+      ms_fournisseur:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - webservice
+    restart: unless-stopped
 
 networks:
   webservice:

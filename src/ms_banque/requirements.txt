@@ -1,2 +1,4 @@
 spyne
 lxml
+redis
+requests

@@ -1,130 +1,165 @@
 import pytest
-from flask import json
 import grpc
-import requests
-from app.app import app as flask_app
-from ms_montantmax import montantmax_pb2, montantmax_pb2_grpc
+from flask import json
+from xml.etree import ElementTree as ET
 
-# Dummy gRPC response
+from app.app import app as flask_app, MS_BANQUE_URL, MS_PROFILRISQUE_URL, MS_FOURNISSEUR_URL
+from ms_montantmax import montantmax_pb2_grpc
+
+# Stub pour gRPC MontantMax
 class DummyLoanResponse:
     def __init__(self, allowed, message):
         self.allowed = allowed
         self.message = message
 
-class FakeStub:
+class FakeMontantStub:
     def __init__(self, _):
         pass
+
     def CheckLoan(self, request):
-        # Approve amounts <=50000, refuse otherwise
         if request.loan_amount <= 50000:
             return DummyLoanResponse(True, "Demande acceptée")
         return DummyLoanResponse(False, "Montant trop élevé")
 
-# Dummy HTTP responses for GraphQL, SOAP, and REST
+
+# DummyResponse pour simuler requests.post
 class DummyResponse:
-    def __init__(self, status_code=200, json_data=None, text="", ok=True):
+    def __init__(self, status_code=200, content=b'', text='', json_data=None):
         self.status_code = status_code
-        self._json = json_data or {}
+        self.content = content
         self.text = text
+        self._json = json_data or {}
+
     def json(self):
         return self._json
+
     @property
     def ok(self):
         return self.status_code == 200
 
+
 @pytest.fixture(autouse=True)
 def mock_services(monkeypatch):
-    # Mock gRPC channel and stub
+    # gRPC stub
     monkeypatch.setattr(grpc, 'insecure_channel', lambda addr: None)
-    monkeypatch.setattr(montantmax_pb2_grpc, 'MontantMaxServiceStub', FakeStub)
+    monkeypatch.setattr(montantmax_pb2_grpc, 'MontantMaxServiceStub', FakeMontantStub)
 
-    # Default GraphQL risk acceptable for amounts <20000, risk élevé otherwise
-    def fake_post(url, **kwargs):
-        if 'graphql' in url:
-            amt = kwargs['json']['variables']['loanAmount']
-            risk = 'elevé' if amt >= 20000 else 'acceptable'
-            return DummyResponse(status_code=200, json_data={'riskProfile': risk})
-        if 'soap' in url:
-            return DummyResponse(status_code=200, text='<ValidateCheckResult>Chèque validé</ValidateCheckResult>')
-        if 'fundTransfers' in url:
+    # requests.post fake
+    def fake_post(url, data=None, json=None, headers=None, timeout=None):
+        # GraphQL risk
+        if url == MS_PROFILRISQUE_URL:
+            amt = json['variables']['loanAmount']
+            risk = 'acceptable' if amt < 20000 else 'elevé'
+            return DummyResponse(json_data={'riskProfile': risk})
+
+        # SubmitChequeRequest SOAP
+        if url == MS_BANQUE_URL:
+            # renvoyer un XML avec un request_id fixe
+            xml = b"""<?xml version='1.0' encoding='UTF-8'?>
+<soap11env:Envelope xmlns:soap11env="http://schemas.xmlsoap.org/soap/envelope/"
+                   xmlns:tns="ms.banque.async">
+  <soap11env:Body>
+    <tns:SubmitChequeRequestResponse>
+      <tns:SubmitChequeRequestResult>fixed-uuid-1234</tns:SubmitChequeRequestResult>
+    </tns:SubmitChequeRequestResponse>
+  </soap11env:Body>
+</soap11env:Envelope>"""
+            return DummyResponse(content=xml, text=xml.decode())
+
+        # Demande de financement REST
+        if url == MS_FOURNISSEUR_URL:
             return DummyResponse(status_code=200, json_data={'status': 'success'})
+
         return DummyResponse(status_code=404)
-    monkeypatch.setattr(requests, 'post', fake_post)
+
+    monkeypatch.setattr("requests.post", fake_post)
+
 
 @pytest.fixture
 def client():
     with flask_app.test_client() as c:
         yield c
 
-# Test missing JSON data
+
 def test_missing_data(client):
-    resp = client.post('/loan')
-    data = resp.get_json()
-    assert resp.status_code == 400
-    assert data['status'] == 'error'
-    assert 'Données de requête manquantes' in data['reason']
+    rv = client.post('/loan')
+    assert rv.status_code == 400
+    js = rv.get_json()
+    assert js['status'] == 'error'
 
-# Test invalid loan_amount type
+
 def test_invalid_amount_type(client):
-    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 'abc'})
-    data = resp.get_json()
-    assert resp.status_code == 400
-    assert data['status'] == 'error'
-    assert 'Le montant doit être un nombre' in data['reason']
+    rv = client.post('/loan', json={'id':'1','personal_info':'x','loan_amount':'abc'})
+    assert rv.status_code == 400
+    assert rv.get_json()['reason'].startswith("Le montant doit être un nombre")
 
-# Test amount too high by gRPC
+
 def test_grpc_refuse(client):
-    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 60000})
-    data = resp.get_json()
-    assert resp.status_code == 400
-    assert data['status'] == 'refused'
-    assert 'Montant trop élevé' in data['reason']
+    rv = client.post('/loan', json={'id':'1','personal_info':'x','loan_amount':60000})
+    assert rv.status_code == 400
+    assert rv.get_json()['status'] == 'refused'
 
-# Test risk refusal for high risk and high amount
+
 def test_risk_refusal(client):
-    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 25000})
-    data = resp.get_json()
-    assert resp.status_code == 400
-    assert data['status'] == 'refused'
-    assert 'Risque trop élevé' in data['reason']
+    rv = client.post('/loan', json={'id':'1','personal_info':'x','loan_amount':25000})
+    assert rv.status_code == 400
+    assert rv.get_json()['reason'] == 'Risque trop élevé'
 
-# Test pending for missing check
-def test_pending_no_check(client):
-    resp = client.post('/loan', json={'id': '1', 'personal_info': 'x', 'loan_amount': 10000})
-    data = resp.get_json()
-    assert resp.status_code == 200
-    assert data['status'] == 'pending'
-    assert 'Veuillez soumettre un chèque' in data['message']
 
-# Test invalid check (seulement SOAP surchargé)
-def test_invalid_check(client, mock_services, monkeypatch):
-    def fake_post_override(url, **kwargs):
-        if 'soap' in url:
-            # Simule un chèque invalide
-            return DummyResponse(status_code=200, text='invalid')
-        # Pour GraphQL
-        if 'graphql' in url:
-            amt = kwargs['json']['variables']['loanAmount']
-            risk = 'elevé' if amt >= 20000 else 'acceptable'
-            return DummyResponse(status_code=200, json_data={'riskProfile': risk})
-        # Pour REST fundTransfers
-        if 'fundTransfers' in url:
-            return DummyResponse(status_code=200, json_data={'status': 'success'})
-        return DummyResponse(status_code=404)
-    monkeypatch.setattr(requests, 'post', fake_post_override)
+def test_flow_async_success(client):
+    # 1) soumission de la demande
+    rv = client.post('/loan', json={'id':'1','personal_info':'x','loan_amount':10000})
+    assert rv.status_code == 200
+    js = rv.get_json()
+    assert js['status'] == 'pending'
+    req_id = js['request_id']
 
-    payload = {'id': '1', 'personal_info': 'x', 'loan_amount': 10000, 'check': 'anything'}
-    resp = client.post('/loan', json=payload)
-    data = resp.get_json()
-    assert resp.status_code == 400
-    assert data['status'] == 'refused'
-    assert 'Chèque invalide' in data['reason']
+    # 2) avant callback, status pending
+    rv2 = client.get(f'/loan/status/{req_id}')
+    assert rv2.status_code == 200
+    assert rv2.get_json()['status'] == 'pending'
 
-# Test successful flow
-def test_success_flow(client):
-    payload = {'id': '1', 'personal_info': 'x', 'loan_amount': 10000, 'check': 'valid'}
-    resp = client.post('/loan', json=payload)
-    data = resp.get_json()
-    assert resp.status_code == 200
-    assert data['status'] == 'approved'
-    assert 'Prêt approuvé' in data['message']
+    # 3) simulate callback valide
+    soap = f"""<?xml version="1.0"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <ChequeStatusResponse>
+      <request_id>{req_id}</request_id>
+      <status>done</status>
+      <verdict>Chèque validé</verdict>
+    </ChequeStatusResponse>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    rv3 = client.post('/loan/callback', data=soap, content_type='text/xml')
+    assert rv3.status_code == 200
+
+    # 4) après callback, status approved
+    rv4 = client.get(f'/loan/status/{req_id}')
+    assert rv4.status_code == 200
+    out = rv4.get_json()
+    assert out['status'] == 'approved'
+    assert 'fonds' in out['message']
+
+
+def test_flow_async_invalid(client):
+    # même soumission
+    rv = client.post('/loan', json={'id':'1','personal_info':'x','loan_amount':10000})
+    req_id = rv.get_json()['request_id']
+
+    # callback invalide
+    soap = f"""<?xml version="1.0"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+  <soapenv:Body>
+    <ChequeStatusResponse>
+      <request_id>{req_id}</request_id>
+      <status>done</status>
+      <verdict>Chèque invalide</verdict>
+    </ChequeStatusResponse>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    client.post('/loan/callback', data=soap, content_type='text/xml')
+
+    # status refused
+    rv2 = client.get(f'/loan/status/{req_id}')
+    assert rv2.status_code == 400
+    assert rv2.get_json()['status'] == 'refused'
