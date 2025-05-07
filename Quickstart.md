@@ -23,40 +23,78 @@ docker compose ps
 
 Assurez-vous que chaque service affiche un état `healthy`.
 
-### 4. Tester un flux complet
+### 4. (Optionnel) Installer **jq** pour formater le JSON
 
-1. **Soumettre une demande** (pas de chèque pour l’instant) :
+```bash
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y jq
+
+# macOS (Homebrew)
+brew install jq
+```
+
+> **Astuce** : si vous n’avez pas `jq`, remplacez `| jq` par `| python3 -m json.tool`.
+
+### 5. Tester un flux complet et récupérer l’historique
+
+1. **Soumettre une demande** (pas de chèque pour l’instant) :
 
    ```bash
-   curl -X POST http://localhost:5000/loan \
+   curl -s -X POST http://localhost:5000/loan \
      -H "Content-Type: application/json" \
-     -d '{"id":"client1","personal_info":"M. Dupont","loan_amount":8000}'
+     -d '{"id":"client1","personal_info":"M. Dupont","loan_amount":8000}' \
+   | jq
    ```
 
-   * Vous obtiendrez un JSON avec `status":"pending"` et un `request_id`.
+   *(ou `| python3 -m json.tool` si vous n’avez pas `jq`)*
 
 2. **Consulter le statut** :
 
    ```bash
-   curl http://localhost:5000/loan/status/<request_id>
+   curl -s http://localhost:5000/loan/status/<request_id> | jq
    ```
 
-   * Devrait retourner `pending`.
+   *Devrait retourner* `pending`.
 
-3. **Simuler dépôt du chèque** (par défaut, `ms_banque` renvoie `valid`) :
+3. **Consulter l’historique** :
 
    ```bash
-   curl -X POST http://localhost:5000/loan/callback \
+   curl -s http://localhost:5000/loan/history/<request_id> | jq
+   ```
+
+   *Vous verrez un tableau d’entrées horodatées décrivant chaque appel aux services.*
+
+4. **Simuler dépôt du chèque** (par défaut, `ms_banque` renvoie `valid`) :
+
+   ```bash
+   curl -s -X POST http://localhost:5000/loan/callback \
      -H "Content-Type: text/xml" \
-     --data '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><ChequeStatusResponse><request_id>'<request_id>'</request_id><status>done</status><verdict>Chèque validé</verdict></ChequeStatusResponse></soapenv:Body></soapenv:Envelope>'
+     --data '<?xml version="1.0"?>
+   <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+     <soapenv:Body>
+       <ChequeStatusResponse>
+         <request_id><request_id></request_id>
+         <status>done</status>
+         <verdict>Chèque validé</verdict>
+       </ChequeStatusResponse>
+     </soapenv:Body>
+   </soapenv:Envelope>'
    ```
 
-4. **Vérifier le statut final** :
+5. **Vérifier le statut final** :
 
    ```bash
-   curl http://localhost:5000/loan/status/<request_id>
+   curl -s http://localhost:5000/loan/status/<request_id> | jq
    ```
 
-   * Vous devriez obtenir `status":"approved"`.
+   *Vous devriez obtenir* `status":"approved"`.
 
-Félicitations ! Votre application de prêt fonctionne.
+6. **Vérifier l’historique mis à jour** :
+
+   ```bash
+   curl -s http://localhost:5000/loan/history/<request_id> | jq
+   ```
+
+   *Vous y trouverez notamment* `ms_banque callback` *et* `ms_fournisseur` *dans la trace.*
+
+Félicitations ! Votre application de prêt fonctionne et vous disposez d’une traçabilité complète de chaque étape.

@@ -1092,7 +1092,9 @@ Chemin relatif: .pytest_cache/v/cache/stepwise
 Chemin relatif: .pytest_cache/v/cache/lastfailed
 {
   "src/test/test_montantmax.py": true,
-  "tests/test/test_montantmax.py": true
+  "tests/test/test_montantmax.py": true,
+  "tests/test_app.py::test_flow_async_success": true,
+  "tests/test_app.py::test_flow_async_invalid": true
 }
 ================================================================================
 Chemin relatif: .pytest_cache/v/cache/nodeids
