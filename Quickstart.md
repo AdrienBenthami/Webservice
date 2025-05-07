@@ -81,6 +81,11 @@ brew install jq
    </soapenv:Envelope>'
    ```
 
+   On pourra aussi interroger le WSDL :
+   ```bash
+   curl -s http://localhost:5002/?wsdl | head -n 20
+   ```
+
 5. **Vérifier le statut final** :
 
    ```bash
